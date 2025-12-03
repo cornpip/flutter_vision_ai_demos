@@ -1,9 +1,15 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:yolo/paint/detection_painter.dart';
+import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:yolo/common/colors.dart';
 
 import '../detector/yolo_detector.dart';
 import '../models/detection.dart';
+import '../widget/camera_control_buttons.dart';
+import '../widget/camera_error_view.dart';
+import '../widget/camera_idle_view.dart';
+import '../widget/camera_preview_view.dart';
+import '../widget/detection_status_chip.dart';
 
 class YoloCameraPage extends StatefulWidget {
   const YoloCameraPage({
@@ -196,11 +202,25 @@ class _YoloCameraPageState extends State<YoloCameraPage>
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        title: const Text('YOLOv11 nano realtime'),
+        scrolledUnderElevation: 0,
+        elevation: 0,
+        backgroundColor: DEFAULT_BG,
+        centerTitle: true,
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              "YOLOv11n realtime",
+              style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
       ),
       body: SafeArea(
         child: _errorMessage != null
-            ? _buildError()
+            ? CameraErrorView(
+                message: _errorMessage ?? '알 수 없는 오류가 발생했어요.',
+              )
             : _isInitializing
                 ? const Center(child: CircularProgressIndicator())
                 : (_isCameraActive &&
@@ -212,175 +232,36 @@ class _YoloCameraPageState extends State<YoloCameraPage>
     );
   }
 
-  Widget _buildError() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Text(
-          _errorMessage ?? '알 수 없는 오류가 발생했어요.',
-          textAlign: TextAlign.center,
-          style: const TextStyle(color: Colors.white70),
-        ),
-      ),
-    );
-  }
-
   Widget _buildCameraPreview(CameraController controller) {
-    final previewSize = controller.value.previewSize;
-    final previewSizeText = previewSize != null
-        ? '${previewSize.width.toStringAsFixed(0)} x ${previewSize.height.toStringAsFixed(0)}'
-        : '알 수 없음';
-    final preview = AspectRatio(
-      aspectRatio: 1 / controller.value.aspectRatio,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          CameraPreview(controller),
-          Positioned.fill(
-            child: CustomPaint(
-              painter: DetectionPainter(detections: _detections),
-            ),
-          ),
-          Positioned(
-            left: 16,
-            bottom: 16,
-            child: _buildStatusChip(),
-          ),
-        ],
+    return CameraPreviewView(
+      controller: controller,
+      detections: _detections,
+      statusChip: DetectionStatusChip(
+        detectionCount: _detections.length,
+        isDetectionActive: _isDetectionActive,
       ),
-    );
-
-    return Column(
-      children: [
-        Expanded(child: Center(child: preview)),
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: Text(
-            'Model: YOLOv11-nano • Detections: ${_detections.length}\n이미지 크기: $previewSizeText',
-            style: const TextStyle(color: Colors.white70),
-            textAlign: TextAlign.center,
-          ),
-        ),
-        _buildControlButtons(),
-      ],
+      controls: _buildControlButtons(),
     );
   }
 
   Widget _buildCameraIdle() {
-    return Column(
-      children: [
-        Expanded(
-          child: Center(
-            child: Text(
-              '촬영 버튼을 눌러 카메라를 시작하세요.',
-              style: const TextStyle(color: Colors.white70),
-            ),
-          ),
-        ),
-        _buildControlButtons(),
-      ],
-    );
+    return CameraIdleView(controls: _buildControlButtons());
   }
 
   Widget _buildControlButtons() {
     final controller = _cameraController;
     final isControllerReady =
         controller != null && controller.value.isInitialized;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: _isCameraBusy
-                      ? null
-                      : () {
-                          _toggleCamera();
-                        },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _isCameraActive
-                        ? Colors.redAccent
-                        : Colors.greenAccent,
-                    foregroundColor: Colors.black,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
-                  icon: Icon(
-                    _isCameraActive ? Icons.stop : Icons.camera,
-                    color: Colors.black,
-                  ),
-                  label: Text(_isCameraActive ? '촬영 정지' : '촬영 시작'),
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: (!_isCameraActive ||
-                          !isControllerReady ||
-                          _isCameraBusy)
-                      ? null
-                      : () {
-                          _toggleDetection();
-                        },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _isDetectionActive
-                        ? Colors.orangeAccent
-                        : Colors.blueAccent,
-                    foregroundColor: Colors.black,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                  ),
-                  icon: Icon(
-                    _isDetectionActive
-                        ? Icons.visibility_off
-                        : Icons.visibility,
-                    color: Colors.black,
-                  ),
-                  label: Text(
-                      _isDetectionActive ? '탐지 정지' : 'YOLO 탐지 시작'),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          ElevatedButton.icon(
-            onPressed: (widget.cameras.length < 2 ||
-                    _isChangingCamera ||
-                    _isCameraBusy)
-                ? null
-                : () {
-                    _switchCamera();
-                  },
-            style: ElevatedButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 16),
-            ),
-            icon: const Icon(Icons.cameraswitch),
-            label: const Text('전면/후면 전환'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatusChip() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.5),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.camera_alt, color: Colors.white70, size: 16),
-          const SizedBox(width: 6),
-          Text(
-            _isDetectionActive ? '${_detections.length} objects' : '탐지 대기',
-            style: const TextStyle(color: Colors.white70),
-          ),
-        ],
-      ),
+    return CameraControlButtons(
+      isCameraActive: _isCameraActive,
+      isDetectionActive: _isDetectionActive,
+      isControllerReady: isControllerReady,
+      isCameraBusy: _isCameraBusy,
+      isChangingCamera: _isChangingCamera,
+      camerasLength: widget.cameras.length,
+      onToggleCamera: _toggleCamera,
+      onToggleDetection: _toggleDetection,
+      onSwitchCamera: _switchCamera,
     );
   }
 
