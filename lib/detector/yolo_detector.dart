@@ -15,10 +15,12 @@ class YoloDetector {
   YoloDetector({
     this.confidenceThreshold = 0.45,
     this.nmsThreshold = 0.4,
+    this.debugSaveFrames = true,
   });
 
   final double confidenceThreshold;
   final double nmsThreshold;
+  final bool debugSaveFrames;
 
   static const _modelPath = 'assets/models/YOLOv11-nano.tflite';
   static const _labelsPath = 'assets/labels/coco_labels.txt';
@@ -57,6 +59,7 @@ class YoloDetector {
       confidenceThreshold,
       nmsThreshold,
       _labels,
+      debugSaveFrames,
     ];
 
     _inferenceIsolate = await Isolate.spawn(
@@ -164,6 +167,7 @@ void _yoloIsolateEntry(List<dynamic> initialMessage) async {
   final double nms = (initialMessage[3] as num).toDouble();
   final List<String> labels =
       (initialMessage[4] as List<dynamic>).cast<String>();
+  final bool debugSaveFrames = initialMessage[5] as bool;
 
   final receivePort = ReceivePort();
   readyPort.send(receivePort.sendPort);
@@ -179,6 +183,7 @@ void _yoloIsolateEntry(List<dynamic> initialMessage) async {
     labels: labels,
     confidenceThreshold: confidence,
     nmsThreshold: nms,
+    debugSaveFrames: debugSaveFrames,
   );
 
   await for (final dynamic message in receivePort) {
@@ -213,6 +218,7 @@ class _YoloIsolateHandler {
     required this.labels,
     required this.confidenceThreshold,
     required this.nmsThreshold,
+    required this.debugSaveFrames,
   }) {
     final interpreterOptions = InterpreterOptions();
     if (Platform.isAndroid) {
@@ -244,6 +250,15 @@ class _YoloIsolateHandler {
   final List<String> labels;
   final double confidenceThreshold;
   final double nmsThreshold;
+  final bool debugSaveFrames;
+  final String _debugFramePath =
+      '${Directory.systemTemp.path}${Platform.pathSeparator}yolo_debug_frame.png';
+  int _frameCounter = 0;
+  double _letterboxScale = 1.0;
+  int _letterboxPadX = 0;
+  int _letterboxPadY = 0;
+  int _sourceWidth = 0;
+  int _sourceHeight = 0;
 
   late final Interpreter _interpreter;
   late final List<int> _inputShape;
@@ -264,6 +279,7 @@ class _YoloIsolateHandler {
     }
 
     final outputShape = outputTensor.shape;
+    // print(outputShape); // [1, 84, 8400]
     final outputLength =
         outputShape.reduce((value, element) => value * element);
     final outputBuffer = _createZeroTensor(outputShape);
@@ -292,6 +308,20 @@ class _YoloIsolateHandler {
 
   void close() {
     _interpreter.close();
+  }
+
+  void _maybeSaveDebugFrame(img.Image image) {
+    _frameCounter++;
+    if (_frameCounter % 2 != 0) {
+      return;
+    }
+    try {
+      final file = File(_debugFramePath);
+      file.parent.createSync(recursive: true);
+      file.writeAsBytesSync(img.encodePng(image), flush: true);
+    } catch (_) {
+      // Debug-only: ignore any write failures.
+    }
   }
 
   img.Image _preprocess(_CameraFrameData frame) {
@@ -351,6 +381,11 @@ class _YoloIsolateHandler {
       oriented = img.flipHorizontal(oriented);
     }
 
+    if (debugSaveFrames) {
+      print("========================================");
+      _maybeSaveDebugFrame(oriented);
+    }
+
     return oriented;
   }
 
@@ -384,12 +419,17 @@ class _YoloIsolateHandler {
       targetWidth / source.width,
       targetHeight / source.height,
     );
+    _letterboxScale = scale;
+    _sourceWidth = source.width;
+    _sourceHeight = source.height;
     final int resizedWidth =
         (source.width * scale).round().clamp(1, targetWidth);
     final int resizedHeight =
         (source.height * scale).round().clamp(1, targetHeight);
     final int padX = ((targetWidth - resizedWidth) / 2).floor();
     final int padY = ((targetHeight - resizedHeight) / 2).floor();
+    _letterboxPadX = padX;
+    _letterboxPadY = padY;
 
     final img.Image resized = img.copyResize(
       source,
@@ -481,13 +521,8 @@ class _YoloIsolateHandler {
       throw UnsupportedError('Unexpected output shape: $_outputShape');
     }
 
-    int boxes = _outputShape[1];
-    int valuesPerBox = _outputShape[2];
-    if (valuesPerBox < 6 && boxes > valuesPerBox) {
-      final temp = boxes;
-      boxes = valuesPerBox;
-      valuesPerBox = temp;
-    }
+    int boxes = _outputShape[2];
+    int valuesPerBox = _outputShape[1];
 
     final detections = <Detection>[];
     for (int i = 0; i < boxes; i++) {
@@ -546,16 +581,30 @@ class _YoloIsolateHandler {
     double width,
     double height,
   ) {
-    final left = (xCenter - width / 2) / _inputWidth;
-    final top = (yCenter - height / 2) / _inputHeight;
-    final right = (xCenter + width / 2) / _inputWidth;
-    final bottom = (yCenter + height / 2) / _inputHeight;
+    final double padX = _letterboxPadX.toDouble();
+    final double padY = _letterboxPadY.toDouble();
+    final double scale = _letterboxScale == 0 ? 1.0 : _letterboxScale;
+
+    double left = xCenter - width / 2;
+    double top = yCenter - height / 2;
+    double right = xCenter + width / 2;
+    double bottom = yCenter + height / 2;
+
+    // Remove letterbox padding.
+    left = (left - padX) / scale;
+    top = (top - padY) / scale;
+    right = (right - padX) / scale;
+    bottom = (bottom - padY) / scale;
+
+    // Normalize to original (pre-letterbox) image size.
+    final double srcWidth = _sourceWidth == 0 ? _inputWidth.toDouble() : _sourceWidth.toDouble();
+    final double srcHeight = _sourceHeight == 0 ? _inputHeight.toDouble() : _sourceHeight.toDouble();
 
     return Rect.fromLTRB(
-      left.clamp(0.0, 1.0),
-      top.clamp(0.0, 1.0),
-      right.clamp(0.0, 1.0),
-      bottom.clamp(0.0, 1.0),
+      (left / srcWidth).clamp(0.0, 1.0),
+      (top / srcHeight).clamp(0.0, 1.0),
+      (right / srcWidth).clamp(0.0, 1.0),
+      (bottom / srcHeight).clamp(0.0, 1.0),
     );
   }
 

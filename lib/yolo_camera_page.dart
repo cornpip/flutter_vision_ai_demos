@@ -1,9 +1,9 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:yolo/paint/detection_painter.dart';
 
 import 'detector/yolo_detector.dart';
 import 'models/detection.dart';
-import 'widgets/detection_painter.dart';
 
 class YoloCameraPage extends StatefulWidget {
   const YoloCameraPage({
@@ -95,7 +95,7 @@ class _YoloCameraPageState extends State<YoloCameraPage>
     }
     final controller = CameraController(
       description,
-      ResolutionPreset.low,
+      ResolutionPreset.veryHigh,
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.yuv420,
     );
