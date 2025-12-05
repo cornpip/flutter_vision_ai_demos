@@ -150,6 +150,9 @@ class _YoloCameraPageState extends State<YoloCameraPage>
           lensDirection: controller.description.lensDirection,
         )
         .then((detections) {
+          if (!mounted || !_isDetectionActive) {
+            return;
+          }
           if (mounted) {
             setState(() {
               _detections = detections;
