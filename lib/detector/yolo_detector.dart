@@ -226,6 +226,13 @@ class _YoloIsolateHandler {
     if (Platform.isAndroid) {
       interpreterOptions.threads =
           math.max(1, Platform.numberOfProcessors ~/ 2);
+      interpreterOptions.useNnApiForAndroid = true;
+    }
+    try {
+      _xnnpackDelegate = XNNPackDelegate();
+      interpreterOptions.addDelegate(_xnnpackDelegate!);
+    } catch (_) {
+      _xnnpackDelegate = null;
     }
     _interpreter = Interpreter.fromBuffer(
       modelBytes,
@@ -270,6 +277,7 @@ class _YoloIsolateHandler {
   late final bool _isChannelsLast;
   late final int _inputHeight;
   late final int _inputWidth;
+  XNNPackDelegate? _xnnpackDelegate;
 
   List<Map<String, dynamic>> predict(Map<String, dynamic> payload) {
     final frame = _CameraFrameData.fromMap(payload);
@@ -311,6 +319,8 @@ class _YoloIsolateHandler {
 
   void close() {
     _interpreter.close();
+    _xnnpackDelegate = null;
+    native_processing.disposePreprocessBuffers();
   }
 
   void _maybeSaveDebugFrame(Uint8List rgbBytes) {

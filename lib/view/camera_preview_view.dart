@@ -98,9 +98,12 @@ class CameraPreviewView extends StatelessWidget {
                               ),
                             if (isCameraAvailable && controller != null)
                               Positioned.fill(
-                                child: CustomPaint(
-                                  painter: DetectionPainter(
-                                      detections: detections),
+                                child: RepaintBoundary(
+                                  child: CustomPaint(
+                                    isComplex: true,
+                                    painter: DetectionPainter(
+                                        detections: detections),
+                                  ),
                                 ),
                               ),
                             Positioned(
