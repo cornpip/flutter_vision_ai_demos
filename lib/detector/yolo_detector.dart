@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:camera/camera.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 import 'package:ffi_plugin_look/ffi_plugin_look.dart' as native_processing;
 import 'package:image/image.dart' as img;
@@ -17,11 +18,13 @@ class YoloDetector {
     this.confidenceThreshold = 0.5,
     this.nmsThreshold = 0.2,
     this.debugSaveFrames = true,
+    this.enableGpuDelegate = false,
   });
 
   final double confidenceThreshold;
   final double nmsThreshold;
   final bool debugSaveFrames;
+  final bool enableGpuDelegate;
 
   static const _modelPath = 'assets/models/YOLOv11-nano.tflite';
   static const _labelsPath = 'assets/labels/coco_labels.txt';
@@ -61,6 +64,7 @@ class YoloDetector {
       nmsThreshold,
       _labels,
       debugSaveFrames,
+      enableGpuDelegate,
     ];
 
     _inferenceIsolate = await Isolate.spawn(
@@ -170,6 +174,7 @@ void _yoloIsolateEntry(List<dynamic> initialMessage) async {
   final List<String> labels =
       (initialMessage[4] as List<dynamic>).cast<String>();
   final bool debugSaveFrames = initialMessage[5] as bool;
+  final bool enableGpuDelegate = initialMessage[6] as bool;
 
   final receivePort = ReceivePort();
   readyPort.send(receivePort.sendPort);
@@ -186,6 +191,7 @@ void _yoloIsolateEntry(List<dynamic> initialMessage) async {
     confidenceThreshold: confidence,
     nmsThreshold: nms,
     debugSaveFrames: debugSaveFrames,
+    enableGpuDelegate: enableGpuDelegate,
   );
 
   await for (final dynamic message in receivePort) {
@@ -221,18 +227,32 @@ class _YoloIsolateHandler {
     required this.confidenceThreshold,
     required this.nmsThreshold,
     required this.debugSaveFrames,
+    required this.enableGpuDelegate,
   }) {
     final interpreterOptions = InterpreterOptions();
+    var gpuDelegateAttached = false;
     if (Platform.isAndroid) {
       interpreterOptions.threads =
           math.max(1, Platform.numberOfProcessors ~/ 2);
       interpreterOptions.useNnApiForAndroid = true;
+      if (enableGpuDelegate) {
+        try {
+          _gpuDelegate = GpuDelegateV2();
+          interpreterOptions.addDelegate(_gpuDelegate!);
+          gpuDelegateAttached = true;
+        } catch (_) {
+          _gpuDelegate = null;
+        }
+      }
     }
-    try {
-      _xnnpackDelegate = XNNPackDelegate();
-      interpreterOptions.addDelegate(_xnnpackDelegate!);
-    } catch (_) {
-      _xnnpackDelegate = null;
+
+    if (!gpuDelegateAttached) {
+      try {
+        _xnnpackDelegate = XNNPackDelegate();
+        interpreterOptions.addDelegate(_xnnpackDelegate!);
+      } catch (_) {
+        _xnnpackDelegate = null;
+      }
     }
     _interpreter = Interpreter.fromBuffer(
       modelBytes,
@@ -260,6 +280,7 @@ class _YoloIsolateHandler {
   final double confidenceThreshold;
   final double nmsThreshold;
   final bool debugSaveFrames;
+  final bool enableGpuDelegate;
   final String _debugFramePath =
       '${Directory.systemTemp.path}${Platform.pathSeparator}yolo_debug_frame.png';
   int _frameCounter = 0;
@@ -277,6 +298,7 @@ class _YoloIsolateHandler {
   late final bool _isChannelsLast;
   late final int _inputHeight;
   late final int _inputWidth;
+  GpuDelegateV2? _gpuDelegate;
   XNNPackDelegate? _xnnpackDelegate;
 
   List<Map<String, dynamic>> predict(Map<String, dynamic> payload) {
@@ -319,6 +341,7 @@ class _YoloIsolateHandler {
 
   void close() {
     _interpreter.close();
+    _gpuDelegate = null;
     _xnnpackDelegate = null;
     native_processing.disposePreprocessBuffers();
   }

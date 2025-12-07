@@ -23,10 +23,7 @@ class _YoloCameraPageState extends State<YoloCameraPage>
     with WidgetsBindingObserver {
   static const Duration _cameraFpsUpdateInterval =
       Duration(milliseconds: 200);
-  final YoloDetector _detector = YoloDetector(
-    confidenceThreshold: 0.6,
-    nmsThreshold: 0.1,
-  );
+  late YoloDetector _detector;
 
   CameraController? _cameraController;
   List<Detection> _detections = const [];
@@ -38,6 +35,10 @@ class _YoloCameraPageState extends State<YoloCameraPage>
   int _currentCameraIndex = 0;
   bool _isChangingCamera = false;
   bool _isCameraBusy = false;
+  bool _useGpuDelegate = false;
+  bool _isDetectorInitializing = false;
+  double _confidenceThreshold = 0.6;
+  double _nmsThreshold = 0.1;
   double _cameraFps = 0;
   double _detectionFps = 0;
   DateTime? _lastCameraFrameTime;
@@ -46,6 +47,11 @@ class _YoloCameraPageState extends State<YoloCameraPage>
   @override
   void initState() {
     super.initState();
+    _detector = YoloDetector(
+      confidenceThreshold: _confidenceThreshold,
+      nmsThreshold: _nmsThreshold,
+      enableGpuDelegate: _useGpuDelegate,
+    );
     WidgetsBinding.instance.addObserver(this);
     _initialize();
   }
@@ -243,6 +249,169 @@ class _YoloCameraPageState extends State<YoloCameraPage>
     await controller.startImageStream(_processCameraImage);
   }
 
+  Future<void> _onAcceleratorToggle(bool value) async {
+    if (_useGpuDelegate == value) {
+      return;
+    }
+    setState(() {
+      _useGpuDelegate = value;
+    });
+    await _reconfigureDetector();
+  }
+
+  Future<void> _onConfidenceChangeEnd(double value) async {
+    await _reconfigureDetector();
+  }
+
+  Future<void> _onNmsChangeEnd(double value) async {
+    await _reconfigureDetector();
+  }
+
+  Future<void> _reconfigureDetector() async {
+    if (_isDetectorInitializing) {
+      return;
+    }
+    setState(() {
+      _isDetectorInitializing = true;
+      _detections = const [];
+      _detectionFps = 0;
+    });
+    final controller = _cameraController;
+    final bool wasDetectionActive = _isDetectionActive;
+    if (controller != null && controller.value.isStreamingImages) {
+      await controller.stopImageStream();
+    }
+    _isProcessingFrame = false;
+    if (mounted) {
+      setState(() {
+        _isDetectionActive = false;
+      });
+    } else {
+      _isDetectionActive = false;
+    }
+
+    _detector.close();
+    _detector = YoloDetector(
+      confidenceThreshold: _confidenceThreshold,
+      nmsThreshold: _nmsThreshold,
+      enableGpuDelegate: _useGpuDelegate,
+    );
+    try {
+      await _detector.initialize();
+      if (wasDetectionActive) {
+        await _startImageStreamIfNeeded();
+        if (mounted) {
+          setState(() {
+            _isDetectionActive = true;
+          });
+        } else {
+          _isDetectionActive = true;
+        }
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = '$error';
+        });
+      } else {
+        _errorMessage = '$error';
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isDetectorInitializing = false;
+        });
+      } else {
+        _isDetectorInitializing = false;
+      }
+    }
+  }
+
+  Widget _buildAcceleratorRow(String acceleratorLabel) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Accelerator',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            Text(
+              acceleratorLabel,
+              style: const TextStyle(color: Colors.black87),
+            ),
+          ],
+        ),
+        Switch(
+          value: _useGpuDelegate,
+          onChanged: (_isDetectorInitializing || _isCameraBusy)
+              ? null
+              : (value) => _onAcceleratorToggle(value),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildConfidenceSlider() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Confidence threshold: ${_confidenceThreshold.toStringAsFixed(2)}',
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        Slider(
+          value: _confidenceThreshold,
+          min: 0.1,
+          max: 0.9,
+          divisions: 40,
+          label: _confidenceThreshold.toStringAsFixed(2),
+          onChanged: (value) {
+            setState(() {
+              _confidenceThreshold = value;
+            });
+          },
+          onChangeEnd: (value) {
+            if (!_isDetectorInitializing) {
+              _onConfidenceChangeEnd(value);
+            }
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildNmsSlider() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'NMS threshold: ${_nmsThreshold.toStringAsFixed(2)}',
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        Slider(
+          value: _nmsThreshold,
+          min: 0.1,
+          max: 0.9,
+          divisions: 40,
+          label: _nmsThreshold.toStringAsFixed(2),
+          onChanged: (value) {
+            setState(() {
+              _nmsThreshold = value;
+            });
+          },
+          onChangeEnd: (value) {
+            if (!_isDetectorInitializing) {
+              _onNmsChangeEnd(value);
+            }
+          },
+        ),
+      ],
+    );
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final controller = _cameraController;
@@ -287,6 +456,8 @@ class _YoloCameraPageState extends State<YoloCameraPage>
     final isCameraAvailable =
         _isCameraActive && controller != null && controller.value.isInitialized;
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final acceleratorLabel =
+        _useGpuDelegate ? 'GPU delegate' : 'XNNPack (default)';
 
     return Scaffold(
       backgroundColor: DEFAULT_BG,
@@ -311,42 +482,66 @@ class _YoloCameraPageState extends State<YoloCameraPage>
                 message: _errorMessage ?? 'An unknown error occurred.',
               )
             : _isInitializing
-            ? const Center(child: CircularProgressIndicator())
-            : AnimatedPadding(
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeOut,
-                padding: EdgeInsets.only(bottom: bottomInset),
-                child: Container(
-                  padding: EdgeInsets.symmetric(horizontal: 20.w),
-                  width: double.infinity,
-                  height: double.infinity,
-                  decoration: const BoxDecoration(color: DEFAULT_BG),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      return SingleChildScrollView(
-                        padding: EdgeInsets.only(bottom: 12.h, top: 12.h),
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(
-                            minHeight: constraints.maxHeight,
-                          ),
-                          child: CameraPreviewView(
-                            controller: controller,
-                            detections: _detections,
-                            cameraFps: _cameraFps,
-                            detectionFps: _detectionFps,
-                            statusChip: DetectionStatusChip(
-                              detectionCount: _detections.length,
-                              isDetectionActive: _isDetectionActive,
+                ? const Center(child: CircularProgressIndicator())
+                : AnimatedPadding(
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOut,
+                    padding: EdgeInsets.only(bottom: bottomInset),
+                    child: Container(
+                      padding: EdgeInsets.symmetric(horizontal: 20.w),
+                      width: double.infinity,
+                      height: double.infinity,
+                      decoration: const BoxDecoration(color: DEFAULT_BG),
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          return SingleChildScrollView(
+                            padding:
+                                EdgeInsets.only(bottom: 12.h, top: 12.h),
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(
+                                minHeight: constraints.maxHeight,
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  CameraPreviewView(
+                                    controller: controller,
+                                    detections: _detections,
+                                    acceleratorLabel: acceleratorLabel,
+                                    cameraFps: _cameraFps,
+                                    detectionFps: _detectionFps,
+                                    statusChip: DetectionStatusChip(
+                                      detectionCount: _detections.length,
+                                      isDetectionActive: _isDetectionActive,
+                                    ),
+                                    controls: _buildControlButtons(),
+                                    isCameraAvailable: isCameraAvailable,
+                                  ),
+                                  SizedBox(height: 20.h),
+                                  _buildAcceleratorRow(acceleratorLabel),
+                                  SizedBox(height: 12.h),
+                                  _buildConfidenceSlider(),
+                                  SizedBox(height: 12.h),
+                                  _buildNmsSlider(),
+                                  if (_isDetectorInitializing)
+                                    const Padding(
+                                      padding: EdgeInsets.only(top: 12),
+                                      child: Text(
+                                        'Reconfiguring accelerator...',
+                                        style:
+                                            TextStyle(color: Colors.black54),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ),
+                                ],
+                              ),
                             ),
-                            controls: _buildControlButtons(),
-                            isCameraAvailable: isCameraAvailable,
-                          ),
-                        ),
-                      );
-                    },
+                          );
+                        },
+                      ),
+                    ),
                   ),
-                ),
-              ),
       ),
     );
   }

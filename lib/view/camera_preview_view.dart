@@ -11,6 +11,7 @@ class CameraPreviewView extends StatelessWidget {
     super.key,
     required this.controller,
     required this.detections,
+    required this.acceleratorLabel,
     required this.cameraFps,
     required this.detectionFps,
     required this.statusChip,
@@ -20,6 +21,7 @@ class CameraPreviewView extends StatelessWidget {
 
   final CameraController? controller;
   final List<Detection> detections;
+  final String acceleratorLabel;
   final double cameraFps;
   final double detectionFps;
   final Widget statusChip;
@@ -53,7 +55,7 @@ class CameraPreviewView extends StatelessWidget {
           clipBehavior: Clip.none,
           children: [
             Container(
-              width: previewWidth * 1.1,
+              width: previewWidth * 1.05,
               decoration:
                   BoxDecoration(color: Colors.black54, borderRadius: borderRadius),
               child: AspectRatio(
@@ -144,7 +146,8 @@ class CameraPreviewView extends StatelessWidget {
         Padding(
           padding: EdgeInsets.symmetric(vertical: 0),
           child: Text(
-            'Model: YOLOv11-nano • Detections: ${detections.length}\nImage size: $previewSizeText',
+            'Model: YOLOv11-nano • Detections: ${detections.length}\n'
+            'Image size: $previewSizeText\nAccelerator: $acceleratorLabel',
             style: const TextStyle(color: Colors.black),
             textAlign: TextAlign.center,
           ),
