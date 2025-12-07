@@ -11,6 +11,8 @@ class CameraPreviewView extends StatelessWidget {
     super.key,
     required this.controller,
     required this.detections,
+    required this.cameraFps,
+    required this.detectionFps,
     required this.statusChip,
     required this.controls,
     required this.isCameraAvailable,
@@ -18,6 +20,8 @@ class CameraPreviewView extends StatelessWidget {
 
   final CameraController? controller;
   final List<Detection> detections;
+  final double cameraFps;
+  final double detectionFps;
   final Widget statusChip;
   final Widget controls;
   final bool isCameraAvailable;
@@ -29,12 +33,18 @@ class CameraPreviewView extends StatelessWidget {
     final previewSizeText = previewSize != null
         ? '${previewSize.width.toStringAsFixed(0)} x ${previewSize.height.toStringAsFixed(0)}'
         : 'Unknown';
+    final previewAspectRatio = (previewSize != null && previewSize.width != 0)
+        ? previewSize.height / previewSize.width
+        : 3 / 4;
     final isBackCamera =
         controller?.description.lensDirection == CameraLensDirection.back;
     final borderRadius = BorderRadius.circular(20.r);
     final innerRadius = BorderRadius.circular(18.r);
-    final previewWidth = 300.w;
-    final previewHeight = previewWidth * 4 / 3;
+    final previewWidth = 280.w;
+    final previewHeight = previewWidth / previewAspectRatio;
+    final fpsText =
+        'Cam: ${cameraFps > 0 ? cameraFps.toStringAsFixed(1) : '--'} fps\n'
+        'YOLO: ${detectionFps > 0 ? detectionFps.toStringAsFixed(1) : '--'} fps';
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -43,10 +53,11 @@ class CameraPreviewView extends StatelessWidget {
           clipBehavior: Clip.none,
           children: [
             Container(
+              width: previewWidth * 1.1,
               decoration:
                   BoxDecoration(color: Colors.black54, borderRadius: borderRadius),
               child: AspectRatio(
-                aspectRatio: 3 / 4,
+                aspectRatio: previewAspectRatio,
                 child: ClipRRect(
                   borderRadius: innerRadius,
                   child: Center(
@@ -72,7 +83,7 @@ class CameraPreviewView extends StatelessWidget {
                               )
                             else
                               AspectRatio(
-                                aspectRatio: 3 / 4,
+                                aspectRatio: previewAspectRatio,
                                 child: Container(
                                   decoration: BoxDecoration(
                                     color: Colors.black26,
@@ -93,9 +104,29 @@ class CameraPreviewView extends StatelessWidget {
                                 ),
                               ),
                             Positioned(
-                              left: 16,
-                              bottom: 16,
+                              bottom: 12.h,
+                              left: 12.w,
                               child: statusChip,
+                            ),
+                            Positioned(
+                              top: 12.h,
+                              right: 12.w,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: Colors.black54,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  fpsText,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                  textAlign: TextAlign.right,
+                                ),
+                              ),
                             ),
                           ],
                         ),

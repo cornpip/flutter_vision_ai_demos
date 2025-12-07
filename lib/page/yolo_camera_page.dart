@@ -21,8 +21,10 @@ class YoloCameraPage extends StatefulWidget {
 
 class _YoloCameraPageState extends State<YoloCameraPage>
     with WidgetsBindingObserver {
+  static const Duration _cameraFpsUpdateInterval =
+      Duration(milliseconds: 200);
   final YoloDetector _detector = YoloDetector(
-    confidenceThreshold: 0.7,
+    confidenceThreshold: 0.6,
     nmsThreshold: 0.1,
   );
 
@@ -36,6 +38,10 @@ class _YoloCameraPageState extends State<YoloCameraPage>
   int _currentCameraIndex = 0;
   bool _isChangingCamera = false;
   bool _isCameraBusy = false;
+  double _cameraFps = 0;
+  double _detectionFps = 0;
+  DateTime? _lastCameraFrameTime;
+  DateTime? _lastCameraFpsUpdateTime;
 
   @override
   void initState() {
@@ -116,9 +122,9 @@ class _YoloCameraPageState extends State<YoloCameraPage>
 
     try {
       await controller.initialize();
-      if (_isDetectionActive) {
-        await controller.startImageStream(_processCameraImage);
-      }
+      _clearCameraFps();
+      _clearDetectionFps();
+      await _startImageStreamIfNeeded();
       if (mounted) {
         setState(() {});
       }
@@ -130,19 +136,32 @@ class _YoloCameraPageState extends State<YoloCameraPage>
       } else {
         _errorMessage = 'Camera error: ${error.description ?? error.code}';
       }
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Camera stream error: $error';
+        });
+      } else {
+        _errorMessage = 'Camera stream error: $error';
+      }
     }
   }
 
   void _processCameraImage(CameraImage cameraImage) {
+    _updateCameraFps(DateTime.now());
     final controller = _cameraController;
-    if (_isProcessingFrame ||
-        controller == null ||
-        !controller.value.isStreamingImages ||
-        !_detector.isInitialized) {
+    if (controller == null || !controller.value.isStreamingImages) {
+      return;
+    }
+    if (!_isDetectionActive || !_detector.isInitialized) {
+      return;
+    }
+    if (_isProcessingFrame) {
       return;
     }
 
     _isProcessingFrame = true;
+    final detectionStart = DateTime.now();
     _detector
         .predict(
           cameraImage,
@@ -153,9 +172,15 @@ class _YoloCameraPageState extends State<YoloCameraPage>
           if (!mounted || !_isDetectionActive) {
             return;
           }
+          final detectionEnd = DateTime.now();
+          final durationMicros =
+              detectionEnd.difference(detectionStart).inMicroseconds;
+          final detectionFps =
+              durationMicros > 0 ? 1000000.0 / durationMicros : 0.0;
           if (mounted) {
             setState(() {
               _detections = detections;
+              _detectionFps = detectionFps;
             });
           }
         })
@@ -171,6 +196,51 @@ class _YoloCameraPageState extends State<YoloCameraPage>
         .whenComplete(() {
           _isProcessingFrame = false;
         });
+  }
+
+  void _updateCameraFps(DateTime timestamp) {
+    final previousTimestamp = _lastCameraFrameTime;
+    _lastCameraFrameTime = timestamp;
+    if (previousTimestamp == null) {
+      return;
+    }
+    final elapsedMicros =
+        timestamp.difference(previousTimestamp).inMicroseconds;
+    if (elapsedMicros <= 0) {
+      return;
+    }
+    final fps = 1000000.0 / elapsedMicros;
+    final lastUpdate = _lastCameraFpsUpdateTime;
+    if (lastUpdate != null &&
+        timestamp.difference(lastUpdate) < _cameraFpsUpdateInterval) {
+      return;
+    }
+    _lastCameraFpsUpdateTime = timestamp;
+    if (mounted) {
+      setState(() {
+        _cameraFps = fps;
+      });
+    } else {
+      _cameraFps = fps;
+    }
+  }
+
+  void _clearCameraFps() {
+    _lastCameraFrameTime = null;
+    _lastCameraFpsUpdateTime = null;
+    _cameraFps = 0;
+  }
+
+  void _clearDetectionFps() {
+    _detectionFps = 0;
+  }
+
+  Future<void> _startImageStreamIfNeeded() async {
+    final controller = _cameraController;
+    if (controller == null || controller.value.isStreamingImages) {
+      return;
+    }
+    await controller.startImageStream(_processCameraImage);
   }
 
   @override
@@ -262,6 +332,8 @@ class _YoloCameraPageState extends State<YoloCameraPage>
                           child: CameraPreviewView(
                             controller: controller,
                             detections: _detections,
+                            cameraFps: _cameraFps,
+                            detectionFps: _detectionFps,
                             statusChip: DetectionStatusChip(
                               detectionCount: _detections.length,
                               isDetectionActive: _isDetectionActive,
@@ -323,9 +395,13 @@ class _YoloCameraPageState extends State<YoloCameraPage>
       if (mounted) {
         setState(() {
           _isCameraActive = true;
+          _clearCameraFps();
+          _clearDetectionFps();
         });
       } else {
         _isCameraActive = true;
+        _clearCameraFps();
+        _clearDetectionFps();
       }
     } finally {
       if (mounted) {
@@ -346,11 +422,15 @@ class _YoloCameraPageState extends State<YoloCameraPage>
           _isCameraActive = false;
           _isDetectionActive = false;
           _detections = const [];
+          _clearCameraFps();
+          _clearDetectionFps();
         });
       } else {
         _isCameraActive = false;
         _isDetectionActive = false;
         _detections = const [];
+        _clearCameraFps();
+        _clearDetectionFps();
       }
       return;
     }
@@ -360,12 +440,16 @@ class _YoloCameraPageState extends State<YoloCameraPage>
         _isCameraActive = false;
         _isDetectionActive = false;
         _detections = const [];
+        _clearCameraFps();
+        _clearDetectionFps();
       });
     } else {
       _isCameraBusy = true;
       _isCameraActive = false;
       _isDetectionActive = false;
       _detections = const [];
+      _clearCameraFps();
+      _clearDetectionFps();
     }
 
     _cameraController = null;
@@ -403,42 +487,31 @@ class _YoloCameraPageState extends State<YoloCameraPage>
       return;
     }
     if (_isDetectionActive) {
-      try {
-        if (controller.value.isStreamingImages) {
-          await controller.stopImageStream();
-        }
-        _isProcessingFrame = false;
-        if (mounted) {
-          setState(() {
-            _isDetectionActive = false;
-            _detections = const [];
-          });
-        } else {
+      _isProcessingFrame = false;
+      if (mounted) {
+        setState(() {
           _isDetectionActive = false;
           _detections = const [];
-        }
-      } on CameraException catch (error) {
-        if (mounted) {
-          setState(() {
-            _errorMessage ??=
-                'Detection stop error: ${error.description ?? error.code}';
-          });
-        } else {
-          _errorMessage ??=
-              'Detection stop error: ${error.description ?? error.code}';
-        }
+          _clearDetectionFps();
+        });
+      } else {
+        _isDetectionActive = false;
+        _detections = const [];
+        _clearDetectionFps();
       }
       return;
     }
 
     try {
-      await controller.startImageStream(_processCameraImage);
+      await _startImageStreamIfNeeded();
       if (mounted) {
         setState(() {
           _isDetectionActive = true;
+          _clearDetectionFps();
         });
       } else {
         _isDetectionActive = true;
+        _clearDetectionFps();
       }
     } on CameraException catch (error) {
       if (mounted) {
