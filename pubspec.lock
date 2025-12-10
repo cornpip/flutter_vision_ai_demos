@@ -37,10 +37,10 @@ packages:
     dependency: transitive
     description:
       name: camera_android_camerax
-      sha256: "360a9436980590e7268e0ff9eff482ff73ac3e0f66fffdd203cd93d1bfed0fc4"
+      sha256: "474d8355961658d43f1c976e2fa1ca715505bea1adbd56df34c581aaa70ec41f"
       url: "https://pub.dev"
     source: hosted
-    version: "0.6.25+1"
+    version: "0.6.26+2"
   camera_avfoundation:
     dependency: transitive
     description:
@@ -134,7 +134,7 @@ packages:
     description:
       path: "."
       ref: master
-      resolved-ref: b85670d97e3895542fa36937062e7f599c8f6ba5
+      resolved-ref: "64b124d513a4856baf4fb550da7918f93b0b1b88"
       url: "https://github.com/cornpip/ffi_plugin_test.git"
     source: git
     version: "0.0.1"
