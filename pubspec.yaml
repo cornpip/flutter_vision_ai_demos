@@ -45,6 +45,9 @@ dependencies:
       ref: master
 #    path: ../ffi_plugin_look
 
+  mediapipe_face_mesh:
+    path: ../mediapipe_face_mesh
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

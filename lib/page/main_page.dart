@@ -17,7 +17,12 @@ class MainPage extends StatelessWidget {
       const DemoItem(
         title: 'YOLOv11n realtime',
         subtitle: 'Detect objects with the camera',
-        route: '/camera',
+        route: '/yolo11',
+      ),
+      const DemoItem(
+        title: 'MediaPipe Face',
+        subtitle: '-',
+        route: '/mediapipe_face',
       ),
     ];
 
