@@ -813,14 +813,17 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         final mesh = _faceMesh;
         if (mesh != null && Platform.isAndroid) {
           final meshStart = DateTime.now();
-          meshRotationCompensation =
-              _rotationCompensationDegrees(controller: controller, camera: _currentCamera);
+          meshRotationCompensation = _rotationCompensationDegrees(
+            controller: controller,
+            camera: _currentCamera,
+          );
           meshResult = _runFaceMeshOnAndroidNv21(
             mesh: mesh,
             cameraImage: cameraImage,
             controller: controller,
             camera: _currentCamera,
             face: faces.first,
+            rotationCompensationDegrees: meshRotationCompensation,
           );
           final meshDurationMicros =
               DateTime.now().difference(meshStart).inMicroseconds;
@@ -838,6 +841,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         }
       }
 
+      // detection
       final rotation = _inputImageRotation(controller.description.sensorOrientation);
       if (rotation == null) {
         return;
@@ -862,7 +866,8 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
           if (_isMeshActive) {
             _meshResult = meshResult;
             _meshFps = meshFps;
-            _meshRotationCompensation = meshRotationCompensation;
+            // Mesh output is already expressed in the rotated coordinate system.
+            _meshRotationCompensation = 0;
             _meshLensDirection = controller.description.lensDirection;
           }
         });
@@ -923,6 +928,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     required CameraController controller,
     required CameraDescription camera,
     required Face face,
+    required int? rotationCompensationDegrees,
   }) {
     if (!Platform.isAndroid) {
       return null;
@@ -1000,32 +1006,37 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     }
 
     final FaceMeshNv21Image nv21 = FaceMeshNv21Image(
-      y: yPlane,
-      vu: vuPlane,
+      yPlane: yPlane,
+      vuPlane: vuPlane,
       width: cameraImage.width,
       height: cameraImage.height,
       yBytesPerRow: yBytesPerRow,
       vuBytesPerRow: vuBytesPerRow,
     );
 
-    final rotationCompensation =
-        _rotationCompensationDegrees(controller: controller, camera: camera);
-
-    Rect boxRect = face.boundingBox;
-    if (rotationCompensation != null && rotationCompensation != 0) {
-      boxRect = _mapRectFromRotatedToRaw(
-        rect: boxRect,
-        rotationCompensation: rotationCompensation,
-        rawWidth: cameraImage.width.toDouble(),
-        rawHeight: cameraImage.height.toDouble(),
-      );
+    final rotationCompensation = rotationCompensationDegrees;
+    if (rotationCompensation == null) {
+      return null;
+    }
+    final inputImageRotation =
+        InputImageRotationValue.fromRawValue(rotationCompensation);
+    if (inputImageRotation == null) {
+      return null;
     }
 
+    // ML Kit returns bounding boxes in the coordinate system after applying
+    // `rotationCompensation`. Use that box directly and let the native mesh
+    // implementation apply the same rotation metadata to NV21 sampling.
+    final adjustedSize = _adjustedImageSize(
+      Size(cameraImage.width.toDouble(), cameraImage.height.toDouble()),
+      inputImageRotation,
+    );
+    final bbox = face.boundingBox;
     final clamped = Rect.fromLTRB(
-      boxRect.left.clamp(0.0, cameraImage.width.toDouble()),
-      boxRect.top.clamp(0.0, cameraImage.height.toDouble()),
-      boxRect.right.clamp(0.0, cameraImage.width.toDouble()),
-      boxRect.bottom.clamp(0.0, cameraImage.height.toDouble()),
+      bbox.left.clamp(0.0, adjustedSize.width),
+      bbox.top.clamp(0.0, adjustedSize.height),
+      bbox.right.clamp(0.0, adjustedSize.width),
+      bbox.bottom.clamp(0.0, adjustedSize.height),
     );
 
     final FaceMeshBox box = FaceMeshBox.fromLTWH(
@@ -1042,19 +1053,20 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       _lastRoiMapLogTime = roiLogNow;
       debugPrint(
         '[ROI_MAP]'
-        ' rotCompDeg=${rotationCompensation ?? 'n/a'}'
-        ' mlkit=${face.boundingBox}'
-        ' mapped=$boxRect'
+        ' rotCompDeg=$rotationCompensation'
+        ' mlkit=$bbox'
         ' clamped=$clamped'
-        ' raw=${cameraImage.width}x${cameraImage.height}',
+        ' raw=${cameraImage.width}x${cameraImage.height}'
+        ' adjusted=${adjustedSize.width.toStringAsFixed(0)}x${adjustedSize.height.toStringAsFixed(0)}',
       );
     }
 
     return mesh.processNv21(
       nv21,
       box: box,
-      boxScale: 1.0,
+      boxScale: 1.2,
       boxMakeSquare: true,
+      rotationDegrees: rotationCompensation,
     );
   }
 
@@ -1070,43 +1082,6 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       return (camera.sensorOrientation + deviceRotation) % 360;
     }
     return (camera.sensorOrientation - deviceRotation + 360) % 360;
-  }
-
-  Rect _mapRectFromRotatedToRaw({
-    required Rect rect,
-    required int rotationCompensation,
-    required double rawWidth,
-    required double rawHeight,
-  }) {
-    // ML Kit returns bounding boxes in the coordinate system after applying
-    // [rotationCompensation]. For NV21 processing we need raw frame coordinates.
-    Offset mapPoint(Offset p) {
-      final x = p.dx;
-      final y = p.dy;
-      switch (rotationCompensation) {
-        case 90:
-          // rotated CW90 -> raw
-          return Offset(y, rawHeight - 1 - x);
-        case 180:
-          return Offset(rawWidth - 1 - x, rawHeight - 1 - y);
-        case 270:
-          // rotated CW270 (CCW90) -> raw
-          return Offset(rawWidth - 1 - y, x);
-        default:
-          return p;
-      }
-    }
-
-    final p1 = mapPoint(Offset(rect.left, rect.top));
-    final p2 = mapPoint(Offset(rect.right, rect.top));
-    final p3 = mapPoint(Offset(rect.right, rect.bottom));
-    final p4 = mapPoint(Offset(rect.left, rect.bottom));
-
-    final left = math.min(math.min(p1.dx, p2.dx), math.min(p3.dx, p4.dx));
-    final right = math.max(math.max(p1.dx, p2.dx), math.max(p3.dx, p4.dx));
-    final top = math.min(math.min(p1.dy, p2.dy), math.min(p3.dy, p4.dy));
-    final bottom = math.max(math.max(p1.dy, p2.dy), math.max(p3.dy, p4.dy));
-    return Rect.fromLTRB(left, top, right, bottom);
   }
 
   void _logMeshResult({
