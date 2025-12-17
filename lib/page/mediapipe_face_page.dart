@@ -1,10 +1,15 @@
 import 'dart:math' as math;
-
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:google_mlkit_commons/google_mlkit_commons.dart';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:yolo/common/input_image_converter.dart';
 
 import '../common/colors.dart';
+import '../models/detection.dart';
+import '../paint/detection_painter.dart';
 import '../view/camera_error_view.dart';
 
 class MediaPipeFacePage extends StatefulWidget {
@@ -25,16 +30,28 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
   bool _isCameraBusy = false;
   bool _isChangingCamera = false;
   int _currentCameraIndex = 0;
+  bool _isDetectionActive = false;
   bool _isProcessingFrame = false;
   static const Duration _cameraFpsUpdateInterval =
       Duration(milliseconds: 200);
   double _cameraFps = 0;
+  double _detectionFps = 0;
   DateTime? _lastCameraFrameTime;
   DateTime? _lastCameraFpsUpdateTime;
+  List<Detection> _detections = const [];
+  late final FaceDetector _faceDetector;
+  final InputImageConverter _inputImageConverter = InputImageConverter();
 
   @override
   void initState() {
     super.initState();
+    _faceDetector = FaceDetector(
+      options: FaceDetectorOptions(
+        enableContours: true,
+        enableClassification: true,
+        performanceMode: FaceDetectorMode.fast,
+      ),
+    );
     WidgetsBinding.instance.addObserver(this);
     _initialize();
   }
@@ -89,7 +106,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       description,
       ResolutionPreset.veryHigh,
       enableAudio: false,
-      imageFormatGroup: ImageFormatGroup.yuv420,
+      imageFormatGroup: ImageFormatGroup.nv21,
     );
 
     _cameraController = controller;
@@ -97,6 +114,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     try {
       await controller.initialize();
       _clearCameraFps();
+      _clearDetections();
       await _startImageStreamIfNeeded();
       if (mounted) {
         setState(() {});
@@ -127,16 +145,6 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       return;
     }
     await controller.startImageStream(_processCameraImage);
-  }
-
-  void _processCameraImage(CameraImage cameraImage) {
-    if (_isProcessingFrame) {
-      return;
-    }
-    _updateCameraFps(DateTime.now());
-    _isProcessingFrame = true;
-    // MediaPipe 처리 로직을 여기에 추가할 수 있습니다.
-    _isProcessingFrame = false;
   }
 
   void _updateCameraFps(DateTime timestamp) {
@@ -172,16 +180,24 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     _cameraFps = 0;
   }
 
+  void _clearDetections() {
+    _detections = const [];
+    _detectionFps = 0;
+    _isProcessingFrame = false;
+  }
+
   Future<void> _reinitializeCurrentCamera() async {
     final initialized = await _initializeCamera(_currentCamera);
     if (!initialized) {
       if (mounted) {
         setState(() {
           _isCameraActive = false;
+          _isDetectionActive = false;
           _clearCameraFps();
         });
       } else {
         _isCameraActive = false;
+        _isDetectionActive = false;
         _clearCameraFps();
       }
     }
@@ -199,11 +215,15 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         setState(() {
           _cameraController = null;
           _isCameraActive = false;
+          _isDetectionActive = false;
+          _clearDetections();
           _clearCameraFps();
         });
       } else {
         _cameraController = null;
         _isCameraActive = false;
+        _isDetectionActive = false;
+        _clearDetections();
         _clearCameraFps();
       }
       controller.dispose();
@@ -218,6 +238,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _cameraController?.dispose();
+    _faceDetector.close();
     super.dispose();
   }
 
@@ -307,7 +328,8 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     final previewHeight = previewWidth / previewAspectRatio;
     final cameraLabel = isBackCamera ? 'Back camera' : 'Front camera';
     final fpsText =
-        'Cam: ${_cameraFps > 0 ? _cameraFps.toStringAsFixed(1) : '--'} fps';
+        'Cam: ${_cameraFps > 0 ? _cameraFps.toStringAsFixed(1) : '--'} fps\n'
+        'Face: ${_detectionFps > 0 ? _detectionFps.toStringAsFixed(1) : '--'} fps';
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -360,6 +382,18 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
                                 ),
                               ),
                             if (isCameraAvailable && controller != null)
+                              Positioned.fill(
+                                child: RepaintBoundary(
+                                  child: CustomPaint(
+                                    isComplex: true,
+                                    painter: DetectionPainter(
+                                      detections: _detections,
+                                      showConfidence: false,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            if (isCameraAvailable && controller != null)
                               Positioned(
                                 top: 12.h,
                                 right: 12.w,
@@ -380,6 +414,25 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
                                   ),
                                 ),
                               ),
+                            Positioned(
+                              bottom: 12.h,
+                              left: 12.w,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: Colors.black54,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  'Faces: ${_detections.length}',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -393,7 +446,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         Padding(
           padding: EdgeInsets.symmetric(vertical: 8.h),
           child: Text(
-            'Preview: $previewSizeText • $cameraLabel',
+            'Preview: $previewSizeText • $cameraLabel • Faces: ${_detections.length}',
             style: const TextStyle(color: Colors.black87),
             textAlign: TextAlign.center,
           ),
@@ -424,6 +477,29 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
                 color: Colors.black,
               ),
               label: Text(_isCameraActive ? 'Stop Cam' : 'Start Cam'),
+            ),
+          ),
+          SizedBox(width: 8.w),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: (!_isCameraActive ||
+                      _isCameraBusy ||
+                      !isControllerReady)
+                  ? null
+                  : _toggleDetection,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _isDetectionActive
+                    ? Colors.orangeAccent
+                    : Colors.blueAccent,
+                foregroundColor: Colors.black,
+                padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+              ),
+              icon: Icon(
+                _isDetectionActive ? Icons.pause : Icons.play_arrow,
+                color: Colors.black,
+              ),
+              label: Text(
+                  _isDetectionActive ? 'Stop Detect' : 'Start Detect'),
             ),
           ),
           SizedBox(width: 8.w),
@@ -467,10 +543,14 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       setState(() {
         _isCameraBusy = true;
         _errorMessage = null;
+        _isDetectionActive = false;
+        _clearDetections();
       });
     } else {
       _isCameraBusy = true;
       _errorMessage = null;
+      _isDetectionActive = false;
+      _clearDetections();
     }
     try {
       final initialized = await _initializeCamera(_currentCamera);
@@ -500,11 +580,15 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       if (mounted) {
         setState(() {
           _isCameraActive = false;
+          _isDetectionActive = false;
           _clearCameraFps();
+          _clearDetections();
         });
       } else {
         _isCameraActive = false;
+        _isDetectionActive = false;
         _clearCameraFps();
+        _clearDetections();
       }
       return;
     }
@@ -512,12 +596,16 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       setState(() {
         _isCameraBusy = true;
         _isCameraActive = false;
+        _isDetectionActive = false;
         _clearCameraFps();
+        _clearDetections();
       });
     } else {
       _isCameraBusy = true;
       _isCameraActive = false;
+      _isDetectionActive = false;
       _clearCameraFps();
+      _clearDetections();
     }
 
     _cameraController = null;
@@ -578,6 +666,152 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         });
       } else {
         _isChangingCamera = false;
+      }
+    }
+  }
+
+  void _processCameraImage(CameraImage cameraImage) {
+    if (_isProcessingFrame) {
+      return;
+    }
+    _updateCameraFps(DateTime.now());
+    if (_cameraController == null || !_isCameraActive || !_isDetectionActive) {
+      return;
+    }
+    _isProcessingFrame = true;
+    _runFaceDetection(cameraImage, _cameraController!).whenComplete(() {
+      _isProcessingFrame = false;
+    });
+  }
+
+  Future<void> _runFaceDetection(
+    CameraImage cameraImage,
+    CameraController controller,
+  ) async {
+    final startTime = DateTime.now();
+    try {
+      final inputImage = _inputImageConverter.fromCameraImage(image: cameraImage, controller: controller, camera: _currentCamera);
+      if (inputImage == null) {
+        return;
+      }
+      final faces = await _faceDetector.processImage(inputImage);
+      if (!mounted || !_isCameraActive || !_isDetectionActive) {
+        return;
+      }
+      final rotation = _inputImageRotation(controller.description.sensorOrientation);
+      if (rotation == null) {
+        return;
+      }
+      final detections = _mapFacesToDetections(
+        faces: faces,
+        imageSize: Size(
+          cameraImage.width.toDouble(),
+          cameraImage.height.toDouble(),
+        ),
+        rotation: rotation,
+        lensDirection: controller.description.lensDirection,
+      );
+      final detectionDuration =
+          DateTime.now().difference(startTime).inMicroseconds;
+      final detectionFps =
+          detectionDuration > 0 ? 1000000.0 / detectionDuration : 0.0;
+      if (mounted) {
+        setState(() {
+          _detections = detections;
+          _detectionFps = detectionFps;
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _errorMessage ??= '$error';
+        });
+      } else {
+        _errorMessage ??= '$error';
+      }
+    }
+  }
+
+  InputImageRotation? _inputImageRotation(int sensorOrientation) {
+    return InputImageRotationValue.fromRawValue(sensorOrientation);
+  }
+
+  Size _adjustedImageSize(Size imageSize, InputImageRotation rotation) {
+    if (rotation == InputImageRotation.rotation90deg ||
+        rotation == InputImageRotation.rotation270deg) {
+      return Size(imageSize.height, imageSize.width);
+    }
+    return imageSize;
+  }
+
+  List<Detection> _mapFacesToDetections({
+    required List<Face> faces,
+    required Size imageSize,
+    required InputImageRotation rotation,
+    required CameraLensDirection lensDirection,
+  }) {
+    final adjustedSize = _adjustedImageSize(imageSize, rotation);
+    return faces.map((face) {
+      double left = face.boundingBox.left / adjustedSize.width;
+      double top = face.boundingBox.top / adjustedSize.height;
+      double right = face.boundingBox.right / adjustedSize.width;
+      double bottom = face.boundingBox.bottom / adjustedSize.height;
+
+      left = left.clamp(0.0, 1.0);
+      top = top.clamp(0.0, 1.0);
+      right = right.clamp(0.0, 1.0);
+      bottom = bottom.clamp(0.0, 1.0);
+
+      return Detection(
+        boundingBox: Rect.fromLTRB(left, top, right, bottom),
+        confidence: 1,
+        label:
+            face.trackingId != null ? 'Face #${face.trackingId}' : 'Face',
+      );
+    }).toList();
+  }
+
+  Future<void> _toggleDetection() async {
+    final controller = _cameraController;
+    if (controller == null ||
+        !controller.value.isInitialized ||
+        _isCameraBusy) {
+      return;
+    }
+    if (_isDetectionActive) {
+      _isProcessingFrame = false;
+      if (mounted) {
+        setState(() {
+          _isDetectionActive = false;
+          _clearDetections();
+        });
+      } else {
+        _isDetectionActive = false;
+        _clearDetections();
+      }
+      return;
+    }
+
+    try {
+      await _startImageStreamIfNeeded();
+      if (mounted) {
+        setState(() {
+          _isDetectionActive = true;
+          _clearDetections();
+        });
+      } else {
+        _isDetectionActive = true;
+        _clearDetections();
+      }
+    } on CameraException catch (error) {
+      if (mounted) {
+        setState(() {
+          _errorMessage =
+              'Detection start error: ${error.description ?? error.code}';
+        });
+      } else {
+        _errorMessage =
+            'Detection start error: ${error.description ?? error.code}';
       }
     }
   }

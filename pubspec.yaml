@@ -47,6 +47,7 @@ dependencies:
 
   mediapipe_face_mesh:
     path: ../mediapipe_face_mesh
+  google_mlkit_face_detection: ^0.13.1
 
 dev_dependencies:
   flutter_test:

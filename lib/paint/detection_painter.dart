@@ -7,9 +7,11 @@ import '../models/detection.dart';
 class DetectionPainter extends CustomPainter {
   DetectionPainter({
     required this.detections,
+    this.showConfidence = true,
   });
 
   final List<Detection> detections;
+  final bool showConfidence;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -27,7 +29,9 @@ class DetectionPainter extends CustomPainter {
       );
       canvas.drawRect(rect, boxPaint);
 
-      final label = '${detection.label} ${(detection.confidence * 100).toStringAsFixed(1)}%';
+      final label = showConfidence
+          ? '${detection.label} ${(detection.confidence * 100).toStringAsFixed(1)}%'
+          : detection.label;
       final textSpan = TextSpan(
         text: label,
         style: const TextStyle(
@@ -61,6 +65,7 @@ class DetectionPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant DetectionPainter oldDelegate) {
-    return oldDelegate.detections != detections;
+    return oldDelegate.detections != detections ||
+        oldDelegate.showConfidence != showConfidence;
   }
 }
