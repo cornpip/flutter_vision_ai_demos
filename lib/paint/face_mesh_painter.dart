@@ -71,10 +71,10 @@ class FaceMeshPainter extends CustomPainter {
         break;
     }
 
-    // Preview applies a horizontal mirror for front camera.
-    if (lensDirection == CameraLensDirection.front) {
-      xOut = 1.0 - xOut;
-    }
+    // 없어야 맞음
+    // if (lensDirection == CameraLensDirection.front) {
+    //   xOut = 1.0 - xOut;
+    // }
 
     return Offset(xOut.clamp(0.0, 1.0), yOut.clamp(0.0, 1.0));
   }
