@@ -1,15 +1,20 @@
+import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:mediapipe_face_mesh/mediapipe_face_mesh.dart';
 import 'package:yolo/common/input_image_converter.dart';
 
 import '../common/colors.dart';
 import '../models/detection.dart';
 import '../paint/detection_painter.dart';
+import '../paint/face_mesh_painter.dart';
 import '../view/camera_error_view.dart';
 
 class MediaPipeFacePage extends StatefulWidget {
@@ -23,6 +28,13 @@ class MediaPipeFacePage extends StatefulWidget {
 
 class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     with WidgetsBindingObserver {
+  static const Map<DeviceOrientation, int> _deviceOrientationDegrees = {
+    DeviceOrientation.portraitUp: 0,
+    DeviceOrientation.landscapeLeft: 90,
+    DeviceOrientation.portraitDown: 180,
+    DeviceOrientation.landscapeRight: 270,
+  };
+
   CameraController? _cameraController;
   String? _errorMessage;
   bool _isInitializing = true;
@@ -31,15 +43,24 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
   bool _isChangingCamera = false;
   int _currentCameraIndex = 0;
   bool _isDetectionActive = false;
+  bool _isMeshActive = false;
   bool _isProcessingFrame = false;
   static const Duration _cameraFpsUpdateInterval =
       Duration(milliseconds: 200);
   double _cameraFps = 0;
   double _detectionFps = 0;
+  double _meshFps = 0;
   DateTime? _lastCameraFrameTime;
   DateTime? _lastCameraFpsUpdateTime;
+  DateTime? _lastMeshLogTime;
+  DateTime? _lastNv21LayoutLogTime;
+  DateTime? _lastRoiMapLogTime;
   List<Detection> _detections = const [];
+  FaceMeshResult? _meshResult;
+  int? _meshRotationCompensation;
+  CameraLensDirection? _meshLensDirection;
   late final FaceDetector _faceDetector;
+  MediapipeFaceMesh? _faceMesh;
   final InputImageConverter _inputImageConverter = InputImageConverter();
 
   @override
@@ -62,6 +83,11 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         throw StateError('No available cameras on this device.');
       }
       _currentCameraIndex = _preferredCameraIndex;
+
+      final mesh = await MediapipeFaceMesh.create();
+      setState(() {
+        _faceMesh = mesh;
+      });
     } catch (error) {
       _errorMessage = '$error';
     } finally {
@@ -186,6 +212,13 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     _isProcessingFrame = false;
   }
 
+  void _clearMesh() {
+    _meshResult = null;
+    _meshFps = 0;
+    _meshRotationCompensation = null;
+    _meshLensDirection = null;
+  }
+
   Future<void> _reinitializeCurrentCamera() async {
     final initialized = await _initializeCamera(_currentCamera);
     if (!initialized) {
@@ -216,6 +249,8 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
           _cameraController = null;
           _isCameraActive = false;
           _isDetectionActive = false;
+          _isMeshActive = false;
+          _clearMesh();
           _clearDetections();
           _clearCameraFps();
         });
@@ -223,6 +258,8 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         _cameraController = null;
         _isCameraActive = false;
         _isDetectionActive = false;
+        _isMeshActive = false;
+        _clearMesh();
         _clearDetections();
         _clearCameraFps();
       }
@@ -239,6 +276,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     WidgetsBinding.instance.removeObserver(this);
     _cameraController?.dispose();
     _faceDetector.close();
+    _faceMesh?.close();
     super.dispose();
   }
 
@@ -329,7 +367,8 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     final cameraLabel = isBackCamera ? 'Back camera' : 'Front camera';
     final fpsText =
         'Cam: ${_cameraFps > 0 ? _cameraFps.toStringAsFixed(1) : '--'} fps\n'
-        'Face: ${_detectionFps > 0 ? _detectionFps.toStringAsFixed(1) : '--'} fps';
+        'Face: ${_detectionFps > 0 ? _detectionFps.toStringAsFixed(1) : '--'} fps\n'
+        'Mesh: ${_meshFps > 0 ? _meshFps.toStringAsFixed(1) : '--'} fps';
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -389,6 +428,25 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
                                     painter: DetectionPainter(
                                       detections: _detections,
                                       showConfidence: false,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            if (isCameraAvailable &&
+                                controller != null &&
+                                _meshResult != null)
+                              Positioned.fill(
+                                child: RepaintBoundary(
+                                child: IgnorePointer(
+                                    child: CustomPaint(
+                                      isComplex: true,
+                                      painter: FaceMeshPainter(
+                                        result: _meshResult!,
+                                        rotationCompensation:
+                                            _meshRotationCompensation ?? 0,
+                                        lensDirection: _meshLensDirection ??
+                                            CameraLensDirection.back,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -461,63 +519,96 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         controller != null && controller.value.isInitialized;
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
-      child: Row(
+      child: Column(
         children: [
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: _isCameraBusy ? null : _toggleCamera,
-              style: ElevatedButton.styleFrom(
-                backgroundColor:
-                    _isCameraActive ? Colors.redAccent : Colors.greenAccent,
-                foregroundColor: Colors.black,
-                padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: _isCameraBusy ? null : _toggleCamera,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor:
+                        _isCameraActive ? Colors.redAccent : Colors.greenAccent,
+                    foregroundColor: Colors.black,
+                    padding:
+                        EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+                  ),
+                  icon: Icon(
+                    _isCameraActive ? Icons.stop : Icons.videocam,
+                    color: Colors.black,
+                  ),
+                  label: Text(_isCameraActive ? 'Stop Cam' : 'Start Cam'),
+                ),
               ),
-              icon: Icon(
-                _isCameraActive ? Icons.stop : Icons.videocam,
-                color: Colors.black,
+              SizedBox(width: 8.w),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: (!_isCameraActive || _isCameraBusy || !isControllerReady)
+                      ? null
+                      : _toggleDetection,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _isDetectionActive
+                        ? Colors.orangeAccent
+                        : Colors.blueAccent,
+                    foregroundColor: Colors.black,
+                    padding:
+                        EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+                  ),
+                  icon: Icon(
+                    _isDetectionActive ? Icons.pause : Icons.play_arrow,
+                    color: Colors.black,
+                  ),
+                  label: Text(
+                      _isDetectionActive ? 'Stop Detect' : 'Start Detect'),
+                ),
               ),
-              label: Text(_isCameraActive ? 'Stop Cam' : 'Start Cam'),
-            ),
+            ],
           ),
-          SizedBox(width: 8.w),
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: (!_isCameraActive ||
-                      _isCameraBusy ||
-                      !isControllerReady)
-                  ? null
-                  : _toggleDetection,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _isDetectionActive
-                    ? Colors.orangeAccent
-                    : Colors.blueAccent,
-                foregroundColor: Colors.black,
-                padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+          SizedBox(height: 8.h),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: (!_isCameraActive ||
+                          _isCameraBusy ||
+                          !isControllerReady ||
+                          !_isDetectionActive ||
+                          _faceMesh == null)
+                      ? null
+                      : _toggleMesh,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor:
+                        _isMeshActive ? Colors.purpleAccent : Colors.purple,
+                    foregroundColor: Colors.black,
+                    padding:
+                        EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+                  ),
+                  icon: Icon(
+                    _isMeshActive ? Icons.stop_circle : Icons.blur_on,
+                    color: Colors.black,
+                  ),
+                  label: Text(_isMeshActive ? 'Stop Mesh' : 'Start Mesh'),
+                ),
               ),
-              icon: Icon(
-                _isDetectionActive ? Icons.pause : Icons.play_arrow,
-                color: Colors.black,
+              SizedBox(width: 8.w),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: (widget.cameras.length < 2 ||
+                          _isChangingCamera ||
+                          _isCameraBusy ||
+                          !_isCameraActive ||
+                          !isControllerReady)
+                      ? null
+                      : _switchCamera,
+                  style: ElevatedButton.styleFrom(
+                    padding:
+                        EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+                  ),
+                  icon: const Icon(Icons.cameraswitch),
+                  label: const Text('Switch'),
+                ),
               ),
-              label: Text(
-                  _isDetectionActive ? 'Stop Detect' : 'Start Detect'),
-            ),
-          ),
-          SizedBox(width: 8.w),
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: (widget.cameras.length < 2 ||
-                      _isChangingCamera ||
-                      _isCameraBusy ||
-                      !_isCameraActive ||
-                      !isControllerReady)
-                  ? null
-                  : _switchCamera,
-              style: ElevatedButton.styleFrom(
-                padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
-              ),
-              icon: const Icon(Icons.cameraswitch),
-              label: const Text('Switch'),
-            ),
+            ],
           ),
         ],
       ),
@@ -544,12 +635,16 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         _isCameraBusy = true;
         _errorMessage = null;
         _isDetectionActive = false;
+        _isMeshActive = false;
+        _clearMesh();
         _clearDetections();
       });
     } else {
       _isCameraBusy = true;
       _errorMessage = null;
       _isDetectionActive = false;
+      _isMeshActive = false;
+      _clearMesh();
       _clearDetections();
     }
     try {
@@ -581,12 +676,16 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         setState(() {
           _isCameraActive = false;
           _isDetectionActive = false;
+          _isMeshActive = false;
+          _clearMesh();
           _clearCameraFps();
           _clearDetections();
         });
       } else {
         _isCameraActive = false;
         _isDetectionActive = false;
+        _isMeshActive = false;
+        _clearMesh();
         _clearCameraFps();
         _clearDetections();
       }
@@ -597,6 +696,8 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         _isCameraBusy = true;
         _isCameraActive = false;
         _isDetectionActive = false;
+        _isMeshActive = false;
+        _clearMesh();
         _clearCameraFps();
         _clearDetections();
       });
@@ -604,6 +705,8 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       _isCameraBusy = true;
       _isCameraActive = false;
       _isDetectionActive = false;
+      _isMeshActive = false;
+      _clearMesh();
       _clearCameraFps();
       _clearDetections();
     }
@@ -690,7 +793,11 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
   ) async {
     final startTime = DateTime.now();
     try {
-      final inputImage = _inputImageConverter.fromCameraImage(image: cameraImage, controller: controller, camera: _currentCamera);
+      final inputImage = _inputImageConverter.fromCameraImage(
+        image: cameraImage,
+        controller: controller,
+        camera: _currentCamera,
+      );
       if (inputImage == null) {
         return;
       }
@@ -698,6 +805,39 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       if (!mounted || !_isCameraActive || !_isDetectionActive) {
         return;
       }
+
+      FaceMeshResult? meshResult;
+      double meshFps = 0;
+      int? meshRotationCompensation;
+      if (_isMeshActive && faces.isNotEmpty) {
+        final mesh = _faceMesh;
+        if (mesh != null && Platform.isAndroid) {
+          final meshStart = DateTime.now();
+          meshRotationCompensation =
+              _rotationCompensationDegrees(controller: controller, camera: _currentCamera);
+          meshResult = _runFaceMeshOnAndroidNv21(
+            mesh: mesh,
+            cameraImage: cameraImage,
+            controller: controller,
+            camera: _currentCamera,
+            face: faces.first,
+          );
+          final meshDurationMicros =
+              DateTime.now().difference(meshStart).inMicroseconds;
+          meshFps =
+              meshDurationMicros > 0 ? 1000000.0 / meshDurationMicros : 0.0;
+          if (meshResult != null) {
+            _logMeshResult(
+              cameraImage: cameraImage,
+              controller: controller,
+              camera: _currentCamera,
+              face: faces.first,
+              result: meshResult,
+            );
+          }
+        }
+      }
+
       final rotation = _inputImageRotation(controller.description.sensorOrientation);
       if (rotation == null) {
         return;
@@ -719,6 +859,12 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         setState(() {
           _detections = detections;
           _detectionFps = detectionFps;
+          if (_isMeshActive) {
+            _meshResult = meshResult;
+            _meshFps = meshFps;
+            _meshRotationCompensation = meshRotationCompensation;
+            _meshLensDirection = controller.description.lensDirection;
+          }
         });
       }
     } catch (error) {
@@ -771,6 +917,306 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     }).toList();
   }
 
+  FaceMeshResult? _runFaceMeshOnAndroidNv21({
+    required MediapipeFaceMesh mesh,
+    required CameraImage cameraImage,
+    required CameraController controller,
+    required CameraDescription camera,
+    required Face face,
+  }) {
+    if (!Platform.isAndroid) {
+      return null;
+    }
+
+    final now = DateTime.now();
+    final lastLayoutLog = _lastNv21LayoutLogTime;
+    if (lastLayoutLog == null ||
+        now.difference(lastLayoutLog) >= const Duration(seconds: 1)) {
+      _lastNv21LayoutLogTime = now;
+      debugPrint(
+        '[NV21 Layout] img=${cameraImage.width}x${cameraImage.height}'
+        ' group=${cameraImage.format.group} raw=${cameraImage.format.raw}'
+        ' planes=${cameraImage.planes.length}',
+      );
+      for (var i = 0; i < cameraImage.planes.length; i++) {
+        final p = cameraImage.planes[i];
+        debugPrint(
+          '[NV21 Layout] plane$i'
+          ' bytes=${p.bytes.length}'
+          ' bytesPerRow=${p.bytesPerRow}'
+          ' bytesPerPixel=${p.bytesPerPixel}'
+          ' w=${p.width}'
+          ' h=${p.height}',
+        );
+      }
+      if (cameraImage.planes.length == 1) {
+        final p0 = cameraImage.planes.first;
+        final chromaHeight = (cameraImage.height + 1) ~/ 2;
+        final expectedY = p0.bytesPerRow * cameraImage.height;
+        final expectedVu = p0.bytesPerRow * chromaHeight;
+        final expectedTotal = expectedY + expectedVu;
+        debugPrint(
+          '[NV21 Layout] planes=1 expected'
+          ' chromaHeight=$chromaHeight'
+          ' ySize=$expectedY'
+          ' vuSize=$expectedVu'
+          ' total=$expectedTotal'
+          ' actual=${p0.bytes.length}',
+        );
+      }
+    }
+
+    final planes = cameraImage.planes;
+    if (planes.isEmpty) {
+      return null;
+    }
+
+    Uint8List yPlane;
+    Uint8List vuPlane;
+    int yBytesPerRow;
+    int vuBytesPerRow;
+
+    if (planes.length >= 2) {
+      yPlane = planes[0].bytes;
+      vuPlane = planes[1].bytes;
+      yBytesPerRow = planes[0].bytesPerRow;
+      vuBytesPerRow = planes[1].bytesPerRow;
+    } else {
+      final Plane plane = planes.first;
+      final int width = cameraImage.width;
+      final int height = cameraImage.height;
+      final int rowStride = plane.bytesPerRow;
+      final int ySize = rowStride * height;
+      final int chromaHeight = (height + 1) ~/ 2;
+      final int vuSize = rowStride * chromaHeight;
+      if (plane.bytes.length < ySize + vuSize) {
+        return null;
+      }
+      final Uint8List bytes = plane.bytes;
+      yPlane = Uint8List.sublistView(bytes, 0, ySize);
+      vuPlane = Uint8List.sublistView(bytes, ySize, ySize + vuSize);
+      yBytesPerRow = rowStride;
+      vuBytesPerRow = rowStride;
+    }
+
+    final FaceMeshNv21Image nv21 = FaceMeshNv21Image(
+      y: yPlane,
+      vu: vuPlane,
+      width: cameraImage.width,
+      height: cameraImage.height,
+      yBytesPerRow: yBytesPerRow,
+      vuBytesPerRow: vuBytesPerRow,
+    );
+
+    final rotationCompensation =
+        _rotationCompensationDegrees(controller: controller, camera: camera);
+
+    Rect boxRect = face.boundingBox;
+    if (rotationCompensation != null && rotationCompensation != 0) {
+      boxRect = _mapRectFromRotatedToRaw(
+        rect: boxRect,
+        rotationCompensation: rotationCompensation,
+        rawWidth: cameraImage.width.toDouble(),
+        rawHeight: cameraImage.height.toDouble(),
+      );
+    }
+
+    final clamped = Rect.fromLTRB(
+      boxRect.left.clamp(0.0, cameraImage.width.toDouble()),
+      boxRect.top.clamp(0.0, cameraImage.height.toDouble()),
+      boxRect.right.clamp(0.0, cameraImage.width.toDouble()),
+      boxRect.bottom.clamp(0.0, cameraImage.height.toDouble()),
+    );
+
+    final FaceMeshBox box = FaceMeshBox.fromLTWH(
+      left: clamped.left,
+      top: clamped.top,
+      width: clamped.width,
+      height: clamped.height,
+    );
+
+    final roiLogNow = DateTime.now();
+    final lastRoiLog = _lastRoiMapLogTime;
+    if (lastRoiLog == null ||
+        roiLogNow.difference(lastRoiLog) >= const Duration(seconds: 1)) {
+      _lastRoiMapLogTime = roiLogNow;
+      debugPrint(
+        '[ROI_MAP]'
+        ' rotCompDeg=${rotationCompensation ?? 'n/a'}'
+        ' mlkit=${face.boundingBox}'
+        ' mapped=$boxRect'
+        ' clamped=$clamped'
+        ' raw=${cameraImage.width}x${cameraImage.height}',
+      );
+    }
+
+    return mesh.processNv21(
+      nv21,
+      box: box,
+      boxScale: 1.0,
+      boxMakeSquare: true,
+    );
+  }
+
+  int? _rotationCompensationDegrees({
+    required CameraController controller,
+    required CameraDescription camera,
+  }) {
+    final deviceRotation = _deviceOrientationDegrees[controller.value.deviceOrientation];
+    if (deviceRotation == null) {
+      return null;
+    }
+    if (camera.lensDirection == CameraLensDirection.front) {
+      return (camera.sensorOrientation + deviceRotation) % 360;
+    }
+    return (camera.sensorOrientation - deviceRotation + 360) % 360;
+  }
+
+  Rect _mapRectFromRotatedToRaw({
+    required Rect rect,
+    required int rotationCompensation,
+    required double rawWidth,
+    required double rawHeight,
+  }) {
+    // ML Kit returns bounding boxes in the coordinate system after applying
+    // [rotationCompensation]. For NV21 processing we need raw frame coordinates.
+    Offset mapPoint(Offset p) {
+      final x = p.dx;
+      final y = p.dy;
+      switch (rotationCompensation) {
+        case 90:
+          // rotated CW90 -> raw
+          return Offset(y, rawHeight - 1 - x);
+        case 180:
+          return Offset(rawWidth - 1 - x, rawHeight - 1 - y);
+        case 270:
+          // rotated CW270 (CCW90) -> raw
+          return Offset(rawWidth - 1 - y, x);
+        default:
+          return p;
+      }
+    }
+
+    final p1 = mapPoint(Offset(rect.left, rect.top));
+    final p2 = mapPoint(Offset(rect.right, rect.top));
+    final p3 = mapPoint(Offset(rect.right, rect.bottom));
+    final p4 = mapPoint(Offset(rect.left, rect.bottom));
+
+    final left = math.min(math.min(p1.dx, p2.dx), math.min(p3.dx, p4.dx));
+    final right = math.max(math.max(p1.dx, p2.dx), math.max(p3.dx, p4.dx));
+    final top = math.min(math.min(p1.dy, p2.dy), math.min(p3.dy, p4.dy));
+    final bottom = math.max(math.max(p1.dy, p2.dy), math.max(p3.dy, p4.dy));
+    return Rect.fromLTRB(left, top, right, bottom);
+  }
+
+  void _logMeshResult({
+    required CameraImage cameraImage,
+    required CameraController controller,
+    required CameraDescription camera,
+    required Face face,
+    required FaceMeshResult result,
+  }) {
+    final now = DateTime.now();
+    final last = _lastMeshLogTime;
+    if (last != null && now.difference(last) < const Duration(seconds: 1)) {
+      return;
+    }
+    _lastMeshLogTime = now;
+
+    final roi = result.rect;
+    final bbox = face.boundingBox;
+    final lms = result.landmarks;
+
+    double minX = double.infinity;
+    double maxX = -double.infinity;
+    double minY = double.infinity;
+    double maxY = -double.infinity;
+    double minZ = double.infinity;
+    double maxZ = -double.infinity;
+    for (final lm in lms) {
+      minX = math.min(minX, lm.x);
+      maxX = math.max(maxX, lm.x);
+      minY = math.min(minY, lm.y);
+      maxY = math.max(maxY, lm.y);
+      minZ = math.min(minZ, lm.z);
+      maxZ = math.max(maxZ, lm.z);
+    }
+
+    final deviceOrientation = controller.value.deviceOrientation;
+    final deviceRotation = _deviceOrientationDegrees[deviceOrientation];
+    int? rotationCompensation;
+    if (deviceRotation != null) {
+      if (camera.lensDirection == CameraLensDirection.front) {
+        rotationCompensation = (camera.sensorOrientation + deviceRotation) % 360;
+      } else {
+        rotationCompensation =
+            (camera.sensorOrientation - deviceRotation + 360) % 360;
+      }
+    }
+    final inputImageRotation =
+        rotationCompensation != null
+            ? InputImageRotationValue.fromRawValue(rotationCompensation)
+            : null;
+
+    final adjustedSize = (inputImageRotation == InputImageRotation.rotation90deg ||
+            inputImageRotation == InputImageRotation.rotation270deg)
+        ? Size(cameraImage.height.toDouble(), cameraImage.width.toDouble())
+        : Size(cameraImage.width.toDouble(), cameraImage.height.toDouble());
+
+    debugPrint(
+      '[FRAME]'
+      ' w=${cameraImage.width} h=${cameraImage.height}'
+      ' group=${cameraImage.format.group} raw=${cameraImage.format.raw}'
+      ' planes=${cameraImage.planes.length}'
+      ' yStride=${cameraImage.planes.isNotEmpty ? cameraImage.planes[0].bytesPerRow : 'n/a'}'
+      ' vuStride=${cameraImage.planes.length > 1 ? cameraImage.planes[1].bytesPerRow : 'n/a'}',
+    );
+    debugPrint(
+      '[ORIENTATION]'
+      ' lens=${camera.lensDirection}'
+      ' sensorOrientation=${camera.sensorOrientation}'
+      ' deviceOrientation=$deviceOrientation'
+      ' deviceRotationDeg=${deviceRotation ?? 'n/a'}'
+      ' rotationCompDeg=${rotationCompensation ?? 'n/a'}'
+      ' inputImageRotation=${inputImageRotation ?? 'n/a'}'
+      ' adjustedSize=${adjustedSize.width.toStringAsFixed(0)}x${adjustedSize.height.toStringAsFixed(0)}',
+    );
+    debugPrint(
+      '[MLKIT_BBOX_PX]'
+      ' l=${bbox.left.toStringAsFixed(1)}'
+      ' t=${bbox.top.toStringAsFixed(1)}'
+      ' r=${bbox.right.toStringAsFixed(1)}'
+      ' b=${bbox.bottom.toStringAsFixed(1)}'
+      ' w=${bbox.width.toStringAsFixed(1)}'
+      ' h=${bbox.height.toStringAsFixed(1)}'
+      ' inAdjusted=${bbox.left >= 0 && bbox.top >= 0 && bbox.right <= adjustedSize.width && bbox.bottom <= adjustedSize.height}',
+    );
+    debugPrint(
+      '[MESH_ROI_NORM]'
+      ' xC=${roi.xCenter.toStringAsFixed(4)}'
+      ' yC=${roi.yCenter.toStringAsFixed(4)}'
+      ' w=${roi.width.toStringAsFixed(4)}'
+      ' h=${roi.height.toStringAsFixed(4)}'
+      ' rot=${roi.rotation.toStringAsFixed(4)}',
+    );
+    debugPrint(
+      '[MESH_RESULT]'
+      ' landmarks=${lms.length}'
+      ' score=${result.score.toStringAsFixed(4)}'
+      ' imgW=${result.imageWidth}'
+      ' imgH=${result.imageHeight}'
+      ' lmRangeX=[${minX.toStringAsFixed(4)}, ${maxX.toStringAsFixed(4)}]'
+      ' lmRangeY=[${minY.toStringAsFixed(4)}, ${maxY.toStringAsFixed(4)}]'
+      ' lmRangeZ=[${minZ.toStringAsFixed(4)}, ${maxZ.toStringAsFixed(4)}]',
+    );
+    if (lms.isNotEmpty) {
+      final sample = lms.take(5).map((lm) {
+        return '(${lm.x.toStringAsFixed(3)}, ${lm.y.toStringAsFixed(3)}, ${lm.z.toStringAsFixed(3)})';
+      }).join(', ');
+      debugPrint('[MESH_FIRST5] $sample');
+    }
+  }
+
   Future<void> _toggleDetection() async {
     final controller = _cameraController;
     if (controller == null ||
@@ -783,10 +1229,14 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       if (mounted) {
         setState(() {
           _isDetectionActive = false;
+          _isMeshActive = false;
+          _clearMesh();
           _clearDetections();
         });
       } else {
         _isDetectionActive = false;
+        _isMeshActive = false;
+        _clearMesh();
         _clearDetections();
       }
       return;
@@ -813,6 +1263,52 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         _errorMessage =
             'Detection start error: ${error.description ?? error.code}';
       }
+    }
+  }
+
+  Future<void> _toggleMesh() async {
+    if (_isCameraBusy) {
+      return;
+    }
+    final controller = _cameraController;
+    if (controller == null || !controller.value.isInitialized) {
+      return;
+    }
+    if (!_isDetectionActive) {
+      if (mounted) {
+        setState(() {
+          _errorMessage ??= 'Start Detect first to get a face ROI.';
+        });
+      } else {
+        _errorMessage ??= 'Start Detect first to get a face ROI.';
+      }
+      return;
+    }
+    if (_faceMesh == null) {
+      return;
+    }
+
+    if (_isMeshActive) {
+      if (mounted) {
+        setState(() {
+          _isMeshActive = false;
+          _clearMesh();
+        });
+      } else {
+        _isMeshActive = false;
+        _clearMesh();
+      }
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _isMeshActive = true;
+        _clearMesh();
+      });
+    } else {
+      _isMeshActive = true;
+      _clearMesh();
     }
   }
 }
