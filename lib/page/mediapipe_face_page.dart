@@ -130,7 +130,9 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       description,
       ResolutionPreset.veryHigh,
       enableAudio: false,
-      imageFormatGroup: ImageFormatGroup.nv21,
+      imageFormatGroup: Platform.isIOS
+          ? ImageFormatGroup.bgra8888
+          : ImageFormatGroup.nv21,
     );
 
     _cameraController = controller;
@@ -803,19 +805,29 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       int? meshRotationCompensation;
       if (_isMeshActive && faces.isNotEmpty) {
         final mesh = _faceMesh;
-        if (mesh != null && Platform.isAndroid) {
-          meshRotationCompensation = _rotationCompensationDegrees(
-            controller: controller,
-            camera: _currentCamera,
-          );
-          meshResult = _runFaceMeshOnAndroidNv21(
-            mesh: mesh,
-            cameraImage: cameraImage,
-            controller: controller,
-            camera: _currentCamera,
-            face: faces.first,
-            rotationCompensationDegrees: meshRotationCompensation,
-          );
+        if (mesh != null) {
+          if (Platform.isAndroid) {
+            meshRotationCompensation = _rotationCompensationDegrees(
+              controller: controller,
+              camera: _currentCamera,
+            );
+            meshResult = _runFaceMeshOnAndroidNv21(
+              mesh: mesh,
+              cameraImage: cameraImage,
+              controller: controller,
+              camera: _currentCamera,
+              face: faces.first,
+              rotationCompensationDegrees: meshRotationCompensation,
+            );
+          } else if (Platform.isIOS) {
+            meshRotationCompensation = controller.description.sensorOrientation;
+            meshResult = _runFaceMeshOnIosBgra(
+              mesh: mesh,
+              cameraImage: cameraImage,
+              face: faces.first,
+              rotationCompensationDegrees: meshRotationCompensation,
+            );
+          }
           if (meshResult != null) {
             _logMeshResult(
               cameraImage: cameraImage,
@@ -1044,6 +1056,62 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
 
     return mesh.processNv21(
       nv21,
+      box: box,
+      boxScale: 1.2,
+      boxMakeSquare: true,
+      rotationDegrees: rotationCompensation,
+    );
+  }
+
+  FaceMeshResult? _runFaceMeshOnIosBgra({
+    required MediapipeFaceMesh mesh,
+    required CameraImage cameraImage,
+    required Face face,
+    required int? rotationCompensationDegrees,
+  }) {
+    if (!Platform.isIOS) {
+      return null;
+    }
+    final planes = cameraImage.planes;
+    if (planes.isEmpty) {
+      return null;
+    }
+    final rotationCompensation = rotationCompensationDegrees;
+    if (rotationCompensation == null) {
+      return null;
+    }
+    final inputImageRotation =
+        InputImageRotationValue.fromRawValue(rotationCompensation);
+    if (inputImageRotation == null) {
+      return null;
+    }
+    final Plane plane = planes.first;
+    final FaceMeshImage image = FaceMeshImage(
+      pixels: plane.bytes,
+      width: cameraImage.width,
+      height: cameraImage.height,
+      bytesPerRow: plane.bytesPerRow,
+      pixelFormat: FaceMeshPixelFormat.bgra,
+    );
+    final adjustedSize = _adjustedImageSize(
+      Size(cameraImage.width.toDouble(), cameraImage.height.toDouble()),
+      inputImageRotation,
+    );
+    final bbox = face.boundingBox;
+    final clamped = Rect.fromLTRB(
+      bbox.left.clamp(0.0, adjustedSize.width),
+      bbox.top.clamp(0.0, adjustedSize.height),
+      bbox.right.clamp(0.0, adjustedSize.width),
+      bbox.bottom.clamp(0.0, adjustedSize.height),
+    );
+    final FaceMeshBox box = FaceMeshBox.fromLTWH(
+      left: clamped.left,
+      top: clamped.top,
+      width: clamped.width,
+      height: clamped.height,
+    );
+    return mesh.process(
+      image,
       box: box,
       boxScale: 1.2,
       boxMakeSquare: true,
