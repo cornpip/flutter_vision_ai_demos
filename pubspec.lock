@@ -132,11 +132,9 @@ packages:
   ffi_plugin_look:
     dependency: "direct main"
     description:
-      path: "."
-      ref: master
-      resolved-ref: "64b124d513a4856baf4fb550da7918f93b0b1b88"
-      url: "https://github.com/cornpip/ffi_plugin_test.git"
-    source: git
+      path: "../ffi_plugin_test"
+      relative: true
+    source: path
     version: "0.0.1"
   flutter:
     dependency: "direct main"
