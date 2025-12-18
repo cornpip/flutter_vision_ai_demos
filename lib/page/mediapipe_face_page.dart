@@ -42,6 +42,8 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
   bool _isCameraBusy = false;
   bool _isChangingCamera = false;
   int _currentCameraIndex = 0;
+  int? _backCameraIndex;
+  int? _frontCameraIndex;
   bool _isDetectionActive = false;
   bool _isMeshActive = false;
   bool _isProcessingFrame = false;
@@ -80,7 +82,12 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       if (widget.cameras.isEmpty) {
         throw StateError('No available cameras on this device.');
       }
-      _currentCameraIndex = _preferredCameraIndex;
+      _resolveCameraIndices();
+      if (_backCameraIndex == null &&
+          _frontCameraIndex == null &&
+          widget.cameras.isNotEmpty) {
+        _currentCameraIndex = 0;
+      }
 
       final mesh = await MediapipeFaceMesh.create();
       setState(() {
@@ -99,14 +106,42 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     }
   }
 
-  int get _preferredCameraIndex {
-    if (widget.cameras.isEmpty) {
-      throw StateError('No cameras found on this device.');
-    }
-    final index = widget.cameras.indexWhere(
-      (camera) => camera.lensDirection == CameraLensDirection.back,
+  void _resolveCameraIndices() {
+    _backCameraIndex = _preferredCameraIndexFor(
+      direction: CameraLensDirection.back,
+      preferredLensType: CameraLensType.wide,
     );
-    return index == -1 ? 0 : index;
+    _frontCameraIndex = _preferredCameraIndexFor(
+      direction: CameraLensDirection.front,
+      preferredLensType: CameraLensType.wide,
+    );
+    if (_backCameraIndex != null) {
+      _currentCameraIndex = _backCameraIndex!;
+    } else if (_frontCameraIndex != null) {
+      _currentCameraIndex = _frontCameraIndex!;
+    }
+  }
+
+  int? _preferredCameraIndexFor({
+    required CameraLensDirection direction,
+    CameraLensType preferredLensType = CameraLensType.wide,
+  }) {
+    if (widget.cameras.isEmpty) {
+      return null;
+    }
+    int? preferred;
+    int? fallback;
+    for (var i = 0; i < widget.cameras.length; i++) {
+      final camera = widget.cameras[i];
+      if (camera.lensDirection != direction) {
+        continue;
+      }
+      fallback ??= i;
+      if (camera.lensType == preferredLensType) {
+        preferred ??= i;
+      }
+    }
+    return preferred ?? fallback;
   }
 
   CameraDescription get _currentCamera => widget.cameras[_currentCameraIndex];
@@ -736,11 +771,20 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         !_isCameraActive) {
       return;
     }
-    final nextIndex = (_currentCameraIndex + 1) % widget.cameras.length;
+    final currentLens = _currentCamera.lensDirection;
+    int? nextIndex;
+    if (currentLens == CameraLensDirection.back) {
+      nextIndex = _frontCameraIndex ?? _backCameraIndex;
+    } else {
+      nextIndex = _backCameraIndex ?? _frontCameraIndex;
+    }
+    if (nextIndex == null || nextIndex == _currentCameraIndex) {
+      return;
+    }
     if (mounted) {
       setState(() {
         _isChangingCamera = true;
-        _currentCameraIndex = nextIndex;
+        _currentCameraIndex = nextIndex!;
       });
     } else {
       _isChangingCamera = true;
