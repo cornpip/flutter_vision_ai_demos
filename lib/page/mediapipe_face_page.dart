@@ -423,6 +423,8 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
                                     isComplex: true,
                                     painter: DetectionPainter(
                                       detections: _detections,
+                                      lensDirection:
+                                          controller.description.lensDirection,
                                       showConfidence: false,
                                     ),
                                   ),

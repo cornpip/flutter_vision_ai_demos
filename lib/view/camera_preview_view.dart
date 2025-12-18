@@ -104,7 +104,11 @@ class CameraPreviewView extends StatelessWidget {
                                   child: CustomPaint(
                                     isComplex: true,
                                     painter: DetectionPainter(
-                                        detections: detections),
+                                      detections: detections,
+                                      lensDirection: controller?.description
+                                              .lensDirection ??
+                                          CameraLensDirection.back,
+                                    ),
                                   ),
                                 ),
                               ),

@@ -1,5 +1,7 @@
+import 'dart:io' show Platform;
 import 'dart:math' as math;
 
+import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
 import '../models/detection.dart';
@@ -7,10 +9,12 @@ import '../models/detection.dart';
 class DetectionPainter extends CustomPainter {
   DetectionPainter({
     required this.detections,
+    required this.lensDirection,
     this.showConfidence = true,
   });
 
   final List<Detection> detections;
+  final CameraLensDirection lensDirection;
   final bool showConfidence;
 
   @override
@@ -21,11 +25,12 @@ class DetectionPainter extends CustomPainter {
       ..strokeWidth = 3.0;
 
     for (final detection in detections) {
+      final mirroredBox = _maybeMirror(detection.boundingBox);
       final rect = Rect.fromLTRB(
-        detection.boundingBox.left * size.width,
-        detection.boundingBox.top * size.height,
-        detection.boundingBox.right * size.width,
-        detection.boundingBox.bottom * size.height,
+        mirroredBox.left * size.width,
+        mirroredBox.top * size.height,
+        mirroredBox.right * size.width,
+        mirroredBox.bottom * size.height,
       );
       canvas.drawRect(rect, boxPaint);
 
@@ -63,9 +68,24 @@ class DetectionPainter extends CustomPainter {
     }
   }
 
+  Rect _maybeMirror(Rect box) {
+    if (!Platform.isIOS || lensDirection != CameraLensDirection.front) {
+      return box;
+    }
+    final double mirroredLeft = (1 - box.right).clamp(0.0, 1.0);
+    final double mirroredRight = (1 - box.left).clamp(0.0, 1.0);
+    return Rect.fromLTRB(
+      mirroredLeft,
+      box.top,
+      mirroredRight,
+      box.bottom,
+    );
+  }
+
   @override
   bool shouldRepaint(covariant DetectionPainter oldDelegate) {
     return oldDelegate.detections != detections ||
+        oldDelegate.lensDirection != lensDirection ||
         oldDelegate.showConfidence != showConfidence;
   }
 }

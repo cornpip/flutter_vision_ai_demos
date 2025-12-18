@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:mediapipe_face_mesh/mediapipe_face_mesh.dart';
@@ -71,10 +73,9 @@ class FaceMeshPainter extends CustomPainter {
         break;
     }
 
-    // 없어야 맞음
-    // if (lensDirection == CameraLensDirection.front) {
-    //   xOut = 1.0 - xOut;
-    // }
+    if (Platform.isIOS && lensDirection == CameraLensDirection.front) {
+      xOut = 1.0 - xOut;
+    }
 
     return Offset(xOut.clamp(0.0, 1.0), yOut.clamp(0.0, 1.0));
   }
