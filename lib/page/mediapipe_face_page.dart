@@ -820,7 +820,9 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
               rotationCompensationDegrees: meshRotationCompensation,
             );
           } else if (Platform.isIOS) {
-            meshRotationCompensation = controller.description.sensorOrientation;
+            meshRotationCompensation = _inputImageConverter
+                .rotationFor(controller: controller, camera: _currentCamera)
+                ?.rawValue;
             meshResult = _runFaceMeshOnIosBgra(
               mesh: mesh,
               cameraImage: cameraImage,
@@ -841,7 +843,10 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       }
 
       // detection
-      final rotation = _inputImageRotation(controller.description.sensorOrientation);
+      final rotation = _inputImageConverter.rotationFor(
+        controller: controller,
+        camera: _currentCamera,
+      );
       if (rotation == null) {
         return;
       }
@@ -874,10 +879,6 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         _errorMessage ??= '$error';
       }
     }
-  }
-
-  InputImageRotation? _inputImageRotation(int sensorOrientation) {
-    return InputImageRotationValue.fromRawValue(sensorOrientation);
   }
 
   Size _adjustedImageSize(Size imageSize, InputImageRotation rotation) {

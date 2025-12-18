@@ -17,25 +17,7 @@ class InputImageConverter {
     required CameraController controller,
     required CameraDescription camera,
   }) {
-    final sensorOrientation = camera.sensorOrientation;
-
-    InputImageRotation? rotation;
-    if (Platform.isIOS) {
-      rotation = InputImageRotationValue.fromRawValue(sensorOrientation);
-    } else if (Platform.isAndroid) {
-      var rotationCompensation =
-          _orientations[controller.value.deviceOrientation];
-      if (rotationCompensation == null) return null;
-
-      if (camera.lensDirection == CameraLensDirection.front) {
-        rotationCompensation = (sensorOrientation + rotationCompensation) % 360;
-      } else {
-        rotationCompensation =
-            (sensorOrientation - rotationCompensation + 360) % 360;
-      }
-
-      rotation = InputImageRotationValue.fromRawValue(rotationCompensation);
-    }
+    final rotation = rotationFor(controller: controller, camera: camera);
 
     if (rotation == null) return null;
 
@@ -58,5 +40,37 @@ class InputImageConverter {
         bytesPerRow: plane.bytesPerRow,
       ),
     );
+  }
+
+  InputImageRotation? rotationFor({
+    required CameraController controller,
+    required CameraDescription camera,
+  }) {
+    final sensorOrientation = camera.sensorOrientation;
+
+    if (Platform.isIOS) {
+      // BGRA frames on iOS are delivered already oriented to the device.
+      final rotationCompensation =
+          _orientations[controller.value.deviceOrientation];
+      if (rotationCompensation == null) return null;
+      return InputImageRotationValue.fromRawValue(rotationCompensation);
+    }
+
+    if (Platform.isAndroid) {
+      var rotationCompensation =
+          _orientations[controller.value.deviceOrientation];
+      if (rotationCompensation == null) return null;
+
+      if (camera.lensDirection == CameraLensDirection.front) {
+        rotationCompensation = (sensorOrientation + rotationCompensation) % 360;
+      } else {
+        rotationCompensation =
+            (sensorOrientation - rotationCompensation + 360) % 360;
+      }
+
+      return InputImageRotationValue.fromRawValue(rotationCompensation);
+    }
+
+    return null;
   }
 }
