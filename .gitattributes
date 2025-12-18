@@ -1,1 +1,13 @@
-* text eol=lf
+# Normalize text files to LF while letting Git auto-detect binaries
+* text=auto eol=lf
+
+# Do not touch line endings for binary assets
+*.png -text
+*.jpg -text
+*.jpeg -text
+*.gif -text
+*.webp -text
+*.tflite -text
+*.ttf -text
+*.otf -text
+*.ico -text
