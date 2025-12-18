@@ -48,8 +48,6 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
   static const Duration _cameraFpsUpdateInterval =
       Duration(milliseconds: 200);
   double _cameraFps = 0;
-  double _detectionFps = 0;
-  double _meshFps = 0;
   DateTime? _lastCameraFrameTime;
   DateTime? _lastCameraFpsUpdateTime;
   DateTime? _lastMeshLogTime;
@@ -208,13 +206,11 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
 
   void _clearDetections() {
     _detections = const [];
-    _detectionFps = 0;
     _isProcessingFrame = false;
   }
 
   void _clearMesh() {
     _meshResult = null;
-    _meshFps = 0;
     _meshRotationCompensation = null;
     _meshLensDirection = null;
   }
@@ -366,9 +362,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     final previewHeight = previewWidth / previewAspectRatio;
     final cameraLabel = isBackCamera ? 'Back camera' : 'Front camera';
     final fpsText =
-        'Cam: ${_cameraFps > 0 ? _cameraFps.toStringAsFixed(1) : '--'} fps\n'
-        'Face: ${_detectionFps > 0 ? _detectionFps.toStringAsFixed(1) : '--'} fps\n'
-        'Mesh: ${_meshFps > 0 ? _meshFps.toStringAsFixed(1) : '--'} fps';
+        'Cam: ${_cameraFps > 0 ? _cameraFps.toStringAsFixed(1) : '--'} fps';
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -791,7 +785,6 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     CameraImage cameraImage,
     CameraController controller,
   ) async {
-    final startTime = DateTime.now();
     try {
       final inputImage = _inputImageConverter.fromCameraImage(
         image: cameraImage,
@@ -807,12 +800,10 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       }
 
       FaceMeshResult? meshResult;
-      double meshFps = 0;
       int? meshRotationCompensation;
       if (_isMeshActive && faces.isNotEmpty) {
         final mesh = _faceMesh;
         if (mesh != null && Platform.isAndroid) {
-          final meshStart = DateTime.now();
           meshRotationCompensation = _rotationCompensationDegrees(
             controller: controller,
             camera: _currentCamera,
@@ -825,10 +816,6 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
             face: faces.first,
             rotationCompensationDegrees: meshRotationCompensation,
           );
-          final meshDurationMicros =
-              DateTime.now().difference(meshStart).inMicroseconds;
-          meshFps =
-              meshDurationMicros > 0 ? 1000000.0 / meshDurationMicros : 0.0;
           if (meshResult != null) {
             _logMeshResult(
               cameraImage: cameraImage,
@@ -855,17 +842,11 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         rotation: rotation,
         lensDirection: controller.description.lensDirection,
       );
-      final detectionDuration =
-          DateTime.now().difference(startTime).inMicroseconds;
-      final detectionFps =
-          detectionDuration > 0 ? 1000000.0 / detectionDuration : 0.0;
       if (mounted) {
         setState(() {
           _detections = detections;
-          _detectionFps = detectionFps;
           if (_isMeshActive) {
             _meshResult = meshResult;
-            _meshFps = meshFps;
             // Mesh output is already expressed in the rotated coordinate system.
             _meshRotationCompensation = 0;
             _meshLensDirection = controller.description.lensDirection;
