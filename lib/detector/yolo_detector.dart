@@ -431,7 +431,7 @@ class _YoloIsolateHandler {
       width: frame.width,
       height: frame.height,
       rotationDegrees: frame.sensorOrientation,
-      flipHorizontal: frame.lensDirection == CameraLensDirection.front,
+      flipHorizontal: false,
       targetWidth: _inputWidth,
       targetHeight: _inputHeight,
     );
