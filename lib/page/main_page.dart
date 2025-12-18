@@ -21,7 +21,7 @@ class MainPage extends StatelessWidget {
       ),
       const DemoItem(
         title: 'MediaPipe Face',
-        subtitle: '-',
+        subtitle: 'mlkit face detect + mediapipe face mesh',
         route: '/mediapipe_face',
       ),
     ];

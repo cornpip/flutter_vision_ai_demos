@@ -29,58 +29,81 @@ class CameraControlButtons extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
-      child: Row(
+      child: Column(
         children: [
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: isCameraBusy ? null : onToggleCamera,
-              style: ElevatedButton.styleFrom(
-                backgroundColor:
-                    isCameraActive ? Colors.redAccent : Colors.greenAccent,
-                foregroundColor: Colors.black,
-                padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: isCameraBusy ? null : onToggleCamera,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: isCameraActive
+                        ? Colors.redAccent
+                        : Colors.greenAccent,
+                    foregroundColor: Colors.black,
+                    padding:
+                        EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+                  ),
+                  icon: Icon(
+                    isCameraActive ? Icons.stop : Icons.videocam,
+                    color: Colors.black,
+                  ),
+                  label: Text(isCameraActive ? 'Stop Cam' : 'Start Cam'),
+                ),
               ),
-              icon: Icon(
-                isCameraActive ? Icons.stop : Icons.videocam,
-                color: Colors.black,
+              SizedBox(width: 8.w),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: (!isCameraActive ||
+                          !isControllerReady ||
+                          isCameraBusy)
+                      ? null
+                      : onToggleDetection,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: isDetectionActive
+                        ? Colors.orangeAccent
+                        : Colors.blueAccent,
+                    foregroundColor: Colors.black,
+                    padding: EdgeInsets.symmetric(
+                        horizontal: 12.w, vertical: 8.h),
+                  ),
+                  icon: Icon(
+                    isDetectionActive
+                        ? Icons.visibility_off
+                        : Icons.visibility,
+                    color: Colors.black,
+                  ),
+                  label: Text(
+                      isDetectionActive ? 'Stop YOLO' : 'Start YOLO'),
+                ),
               ),
-              label: Text(isCameraActive ? 'Stop Cam' : 'Start Cam'),
-            ),
+            ],
           ),
-          SizedBox(width: 8.w),
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: (!isCameraActive ||
-                      !isControllerReady ||
-                      isCameraBusy)
-                  ? null
-                  : onToggleDetection,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: isDetectionActive
-                    ? Colors.orangeAccent
-                    : Colors.blueAccent,
-                foregroundColor: Colors.black,
-                padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+          SizedBox(height: 8.h),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: (camerasLength < 2 ||
+                          isChangingCamera ||
+                          isCameraBusy ||
+                          !isCameraActive ||
+                          !isControllerReady)
+                      ? null
+                      : onSwitchCamera,
+                  style: ElevatedButton.styleFrom(
+                    padding:
+                        EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+                  ),
+                  icon: const Icon(Icons.cameraswitch),
+                  label: const Text('Switch'),
+                ),
               ),
-              icon: Icon(
-                isDetectionActive ? Icons.visibility_off : Icons.visibility,
-                color: Colors.black,
+              SizedBox(width: 8.w),
+              const Expanded(
+                child: SizedBox.shrink(),
               ),
-              label: Text(isDetectionActive ? 'Stop YOLO' : 'Start YOLO'),
-            ),
-          ),
-          SizedBox(width: 8.w),
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: (camerasLength < 2 || isChangingCamera || isCameraBusy)
-                  ? null
-                  : onSwitchCamera,
-              style: ElevatedButton.styleFrom(
-                padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
-              ),
-              icon: const Icon(Icons.cameraswitch),
-              label: const Text('Switch'),
-            ),
+            ],
           ),
         ],
       ),
