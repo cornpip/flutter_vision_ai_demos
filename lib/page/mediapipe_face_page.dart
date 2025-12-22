@@ -6,7 +6,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:mediapipe_face_mesh/mediapipe_face_mesh.dart';
 import 'package:yolo/common/input_image_converter.dart';
@@ -59,19 +58,12 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
   FaceMeshResult? _meshResult;
   int? _meshRotationCompensation;
   late final FaceDetector _faceDetector;
-  MediapipeFaceMesh? _faceMesh;
+  late final FaceMeshProcessor _faceMeshProcessor;
   final InputImageConverter _inputImageConverter = InputImageConverter();
 
   @override
   void initState() {
     super.initState();
-    _faceDetector = FaceDetector(
-      options: FaceDetectorOptions(
-        enableContours: true,
-        enableClassification: true,
-        performanceMode: FaceDetectorMode.fast,
-      ),
-    );
     WidgetsBinding.instance.addObserver(this);
     _initialize();
   }
@@ -88,9 +80,19 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         _currentCameraIndex = 0;
       }
 
-      final mesh = await MediapipeFaceMesh.create();
+      // faceDetector init
+      _faceDetector = FaceDetector(
+        options: FaceDetectorOptions(
+          enableContours: true,
+          enableClassification: true,
+          performanceMode: FaceDetectorMode.fast,
+        ),
+      );
+
+      // faceMeshProcessor init
+      final faceMeshProcessor = await FaceMeshProcessor.create();
       setState(() {
-        _faceMesh = mesh;
+        _faceMeshProcessor = faceMeshProcessor;
       });
     } catch (error) {
       _errorMessage = '$error';
@@ -307,7 +309,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     WidgetsBinding.instance.removeObserver(this);
     _cameraController?.dispose();
     _faceDetector.close();
-    _faceMesh?.close();
+    _faceMeshProcessor.close();
     super.dispose();
   }
 
@@ -603,8 +605,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
                   onPressed: (!_isCameraActive ||
                           _isCameraBusy ||
                           !isControllerReady ||
-                          !_isDetectionActive ||
-                          _faceMesh == null)
+                      !_isDetectionActive)
                       ? null
                       : _toggleMesh,
                   style: ElevatedButton.styleFrom(
@@ -857,34 +858,31 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       // face mesh process
       FaceMeshResult? meshResult;
       if (_isMeshActive && faces.isNotEmpty) {
-        final mesh = _faceMesh;
-        if (mesh != null) {
-          if (Platform.isAndroid) {
-            meshResult = _runFaceMeshOnAndroidNv21(
-              mesh: mesh,
-              cameraImage: cameraImage,
-              controller: controller,
-              camera: _currentCamera,
-              face: faces.first,
-              rotationCompensationDegrees: rotationCompensation,
-            );
-          } else if (Platform.isIOS) {
-            meshResult = _runFaceMeshOnIosBgra(
-              mesh: mesh,
-              cameraImage: cameraImage,
-              face: faces.first,
-              rotationCompensationDegrees: rotationCompensation,
-            );
-          }
-          if (meshResult != null) {
-            _logMeshResult(
-              cameraImage: cameraImage,
-              controller: controller,
-              camera: _currentCamera,
-              face: faces.first,
-              result: meshResult,
-            );
-          }
+        if (Platform.isAndroid) {
+          meshResult = _runFaceMeshOnAndroidNv21(
+            mesh: _faceMeshProcessor,
+            cameraImage: cameraImage,
+            controller: controller,
+            camera: _currentCamera,
+            face: faces.first,
+            rotationCompensationDegrees: rotationCompensation,
+          );
+        } else if (Platform.isIOS) {
+          meshResult = _runFaceMeshOnIosBgra(
+            mesh: _faceMeshProcessor,
+            cameraImage: cameraImage,
+            face: faces.first,
+            rotationCompensationDegrees: rotationCompensation,
+          );
+        }
+        if (meshResult != null) {
+          _logMeshResult(
+            cameraImage: cameraImage,
+            controller: controller,
+            camera: _currentCamera,
+            face: faces.first,
+            result: meshResult,
+          );
         }
       }
 
@@ -996,7 +994,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
   }
 
   FaceMeshResult? _runFaceMeshOnAndroidNv21({
-    required MediapipeFaceMesh mesh,
+    required FaceMeshProcessor mesh,
     required CameraImage cameraImage,
     required CameraController controller,
     required CameraDescription camera,
@@ -1109,7 +1107,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
   }
 
   FaceMeshResult? _runFaceMeshOnIosBgra({
-    required MediapipeFaceMesh mesh,
+    required FaceMeshProcessor mesh,
     required CameraImage cameraImage,
     required Face face,
     required int? rotationCompensationDegrees,
@@ -1358,9 +1356,6 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       } else {
         _errorMessage ??= 'Start Detect first to get a face ROI.';
       }
-      return;
-    }
-    if (_faceMesh == null) {
       return;
     }
 
