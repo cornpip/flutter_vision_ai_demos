@@ -19,9 +19,14 @@ import '../paint/face_mesh_painter.dart';
 import '../view/camera_error_view.dart';
 
 class MediaPipeFacePage extends StatefulWidget {
-  const MediaPipeFacePage({super.key, required this.cameras});
+  const MediaPipeFacePage({
+    super.key,
+    required this.cameras,
+    this.useStreamProcessor = true,
+  });
 
   final List<CameraDescription> cameras;
+  final bool useStreamProcessor;
 
   @override
   State<MediaPipeFacePage> createState() => _MediaPipeFacePageState();
@@ -53,7 +58,9 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
   double _cameraFps = 0;
   DateTime? _lastCameraFrameTime;
   DateTime? _lastCameraFpsUpdateTime;
+  DateTime? _lastMeshLogTime;
   DateTime? _lastNv21LayoutLogTime;
+  DateTime? _lastRoiMapLogTime;
   List<Detection> _detections = const [];
   FaceMeshResult? _meshResult;
   int? _meshRotationCompensation;
@@ -955,7 +962,38 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
           faces.isNotEmpty ? faces.first.boundingBox : null;
       _lastRotationCompensation = rotationCompensation;
 
-      if (_isMeshActive && faces.isNotEmpty) {
+      FaceMeshResult? meshResult;
+      // Per-frame mesh inference
+      if (!widget.useStreamProcessor) {
+        if (_isMeshActive && faces.isNotEmpty) {
+          if (Platform.isAndroid) {
+            meshResult = _runFaceMeshOnAndroidNv21(
+              mesh: _faceMeshProcessor,
+              cameraImage: cameraImage,
+              face: faces.first,
+              rotationCompensationDegrees: rotationCompensation,
+            );
+          } else if (Platform.isIOS) {
+            meshResult = _runFaceMeshOnIosBgra(
+              mesh: _faceMeshProcessor,
+              cameraImage: cameraImage,
+              face: faces.first,
+              rotationCompensationDegrees: rotationCompensation,
+            );
+          }
+          if (meshResult != null) {
+            _logMeshResult(
+              cameraImage: cameraImage,
+              controller: controller,
+              camera: _currentCamera,
+              face: faces.first,
+              result: meshResult,
+            );
+          }
+        }
+      }
+      // Stream-based mesh processing
+      else if (_isMeshActive && faces.isNotEmpty) {
         _enqueueMeshFrame(
           cameraImage: cameraImage,
           rotationCompensationDegrees: rotationCompensation,
@@ -975,7 +1013,11 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       if (mounted) {
         setState(() {
           _detections = detections;
-          if (!_isMeshActive || faces.isEmpty) {
+          if (!widget.useStreamProcessor && _isMeshActive) {
+            _meshResult = meshResult;
+            _meshRotationCompensation = meshResult != null ? 0 : null;
+          } else if (!_isMeshActive || faces.isEmpty) {
+            // Stream mode: results are handled by _handleMeshResult.
             _meshResult = null;
             _meshRotationCompensation = null;
           }
@@ -1141,6 +1183,122 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     );
   }
 
+  FaceMeshResult? _runFaceMeshOnAndroidNv21({
+    required FaceMeshProcessor mesh,
+    required CameraImage cameraImage,
+    required Face face,
+    required int? rotationCompensationDegrees,
+  }) {
+    if (!Platform.isAndroid) {
+      return null;
+    }
+
+    final nv21 = _buildNv21Image(cameraImage: cameraImage);
+    if (nv21 == null) {
+      return null;
+    }
+
+    final rotationCompensation = rotationCompensationDegrees;
+    if (rotationCompensation == null) {
+      return null;
+    }
+    final inputImageRotation =
+        InputImageRotationValue.fromRawValue(rotationCompensation);
+    if (inputImageRotation == null) {
+      return null;
+    }
+
+    final adjustedSize = _adjustedImageSize(
+      Size(cameraImage.width.toDouble(), cameraImage.height.toDouble()),
+      inputImageRotation,
+    );
+    final bbox = face.boundingBox;
+    final clamped = Rect.fromLTRB(
+      bbox.left.clamp(0.0, adjustedSize.width),
+      bbox.top.clamp(0.0, adjustedSize.height),
+      bbox.right.clamp(0.0, adjustedSize.width),
+      bbox.bottom.clamp(0.0, adjustedSize.height),
+    );
+
+    final FaceMeshBox box = FaceMeshBox.fromLTWH(
+      left: clamped.left,
+      top: clamped.top,
+      width: clamped.width,
+      height: clamped.height,
+    );
+
+    final roiLogNow = DateTime.now();
+    final lastRoiLog = _lastRoiMapLogTime;
+    if (lastRoiLog == null ||
+        roiLogNow.difference(lastRoiLog) >= const Duration(seconds: 1)) {
+      _lastRoiMapLogTime = roiLogNow;
+      debugPrint(
+        '[ROI_MAP]'
+        ' rotCompDeg=$rotationCompensation'
+        ' mlkit=$bbox'
+        ' clamped=$clamped'
+        ' raw=${cameraImage.width}x${cameraImage.height}'
+        ' adjusted=${adjustedSize.width.toStringAsFixed(0)}x${adjustedSize.height.toStringAsFixed(0)}',
+      );
+    }
+
+    return mesh.processNv21(
+      nv21,
+      box: box,
+      boxScale: 1.2,
+      boxMakeSquare: true,
+      rotationDegrees: rotationCompensation,
+    );
+  }
+
+  FaceMeshResult? _runFaceMeshOnIosBgra({
+    required FaceMeshProcessor mesh,
+    required CameraImage cameraImage,
+    required Face face,
+    required int? rotationCompensationDegrees,
+  }) {
+    if (!Platform.isIOS) {
+      return null;
+    }
+    final image = _buildBgraImage(cameraImage: cameraImage);
+    if (image == null) {
+      return null;
+    }
+    final rotationCompensation = rotationCompensationDegrees;
+    if (rotationCompensation == null) {
+      return null;
+    }
+    final inputImageRotation =
+        InputImageRotationValue.fromRawValue(rotationCompensation);
+    if (inputImageRotation == null) {
+      return null;
+    }
+    final adjustedSize = _adjustedImageSize(
+      Size(cameraImage.width.toDouble(), cameraImage.height.toDouble()),
+      inputImageRotation,
+    );
+    final bbox = face.boundingBox;
+    final clamped = Rect.fromLTRB(
+      bbox.left.clamp(0.0, adjustedSize.width),
+      bbox.top.clamp(0.0, adjustedSize.height),
+      bbox.right.clamp(0.0, adjustedSize.width),
+      bbox.bottom.clamp(0.0, adjustedSize.height),
+    );
+    final FaceMeshBox box = FaceMeshBox.fromLTWH(
+      left: clamped.left,
+      top: clamped.top,
+      width: clamped.width,
+      height: clamped.height,
+    );
+    return mesh.process(
+      image,
+      box: box,
+      boxScale: 1.2,
+      boxMakeSquare: true,
+      rotationDegrees: rotationCompensation,
+    );
+  }
+
   FaceMeshBox? _resolveFaceMeshBoxForNv21(FaceMeshNv21Image frame) {
     return _resolveFaceMeshBox(
       width: frame.width,
@@ -1217,6 +1375,114 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       }
       _isMeshStreamBusy = true;
       controller.add(frame);
+    }
+  }
+
+  void _logMeshResult({
+    required CameraImage cameraImage,
+    required CameraController controller,
+    required CameraDescription camera,
+    required Face face,
+    required FaceMeshResult result,
+  }) {
+    final now = DateTime.now();
+    final last = _lastMeshLogTime;
+    if (last != null && now.difference(last) < const Duration(seconds: 1)) {
+      return;
+    }
+    _lastMeshLogTime = now;
+
+    final roi = result.rect;
+    final bbox = face.boundingBox;
+    final lms = result.landmarks;
+
+    double minX = double.infinity;
+    double maxX = -double.infinity;
+    double minY = double.infinity;
+    double maxY = -double.infinity;
+    double minZ = double.infinity;
+    double maxZ = -double.infinity;
+    for (final lm in lms) {
+      minX = math.min(minX, lm.x);
+      maxX = math.max(maxX, lm.x);
+      minY = math.min(minY, lm.y);
+      maxY = math.max(maxY, lm.y);
+      minZ = math.min(minZ, lm.z);
+      maxZ = math.max(maxZ, lm.z);
+    }
+
+    final deviceOrientation = controller.value.deviceOrientation;
+    final deviceRotation = _deviceOrientationDegrees[deviceOrientation];
+    int? rotationCompensation;
+    if (deviceRotation != null) {
+      if (camera.lensDirection == CameraLensDirection.front) {
+        rotationCompensation = (camera.sensorOrientation + deviceRotation) % 360;
+      } else {
+        rotationCompensation =
+            (camera.sensorOrientation - deviceRotation + 360) % 360;
+      }
+    }
+    final inputImageRotation =
+        rotationCompensation != null
+            ? InputImageRotationValue.fromRawValue(rotationCompensation)
+            : null;
+
+    final adjustedSize = (inputImageRotation == InputImageRotation.rotation90deg ||
+            inputImageRotation == InputImageRotation.rotation270deg)
+        ? Size(cameraImage.height.toDouble(), cameraImage.width.toDouble())
+        : Size(cameraImage.width.toDouble(), cameraImage.height.toDouble());
+
+    debugPrint(
+      '[FRAME]'
+      ' w=${cameraImage.width} h=${cameraImage.height}'
+      ' group=${cameraImage.format.group} raw=${cameraImage.format.raw}'
+      ' planes=${cameraImage.planes.length}'
+      ' yStride=${cameraImage.planes.isNotEmpty ? cameraImage.planes[0].bytesPerRow : 'n/a'}'
+      ' vuStride=${cameraImage.planes.length > 1 ? cameraImage.planes[1].bytesPerRow : 'n/a'}',
+    );
+    debugPrint(
+      '[ORIENTATION]'
+      ' lens=${camera.lensDirection}'
+      ' sensorOrientation=${camera.sensorOrientation}'
+      ' deviceOrientation=$deviceOrientation'
+      ' deviceRotationDeg=${deviceRotation ?? 'n/a'}'
+      ' rotationCompDeg=${rotationCompensation ?? 'n/a'}'
+      ' inputImageRotation=${inputImageRotation ?? 'n/a'}'
+      ' adjustedSize=${adjustedSize.width.toStringAsFixed(0)}x${adjustedSize.height.toStringAsFixed(0)}',
+    );
+    debugPrint(
+      '[MLKIT_BBOX_PX]'
+      ' l=${bbox.left.toStringAsFixed(1)}'
+      ' t=${bbox.top.toStringAsFixed(1)}'
+      ' r=${bbox.right.toStringAsFixed(1)}'
+      ' b=${bbox.bottom.toStringAsFixed(1)}'
+      ' w=${bbox.width.toStringAsFixed(1)}'
+      ' h=${bbox.height.toStringAsFixed(1)}'
+      ' inAdjusted=${bbox.left >= 0 && bbox.top >= 0 && bbox.right <= adjustedSize.width && bbox.bottom <= adjustedSize.height}',
+    );
+    debugPrint(
+      '[MESH_ROI_NORM]'
+      ' xC=${roi.xCenter.toStringAsFixed(4)}'
+      ' yC=${roi.yCenter.toStringAsFixed(4)}'
+      ' w=${roi.width.toStringAsFixed(4)}'
+      ' h=${roi.height.toStringAsFixed(4)}'
+      ' rot=${roi.rotation.toStringAsFixed(4)}',
+    );
+    debugPrint(
+      '[MESH_RESULT]'
+      ' landmarks=${lms.length}'
+      ' score=${result.score.toStringAsFixed(4)}'
+      ' imgW=${result.imageWidth}'
+      ' imgH=${result.imageHeight}'
+      ' lmRangeX=[${minX.toStringAsFixed(4)}, ${maxX.toStringAsFixed(4)}]'
+      ' lmRangeY=[${minY.toStringAsFixed(4)}, ${maxY.toStringAsFixed(4)}]'
+      ' lmRangeZ=[${minZ.toStringAsFixed(4)}, ${maxZ.toStringAsFixed(4)}]',
+    );
+    if (lms.isNotEmpty) {
+      final sample = lms.take(5).map((lm) {
+        return '(${lm.x.toStringAsFixed(3)}, ${lm.y.toStringAsFixed(3)}, ${lm.z.toStringAsFixed(3)})';
+      }).join(', ');
+      debugPrint('[MESH_FIRST5] $sample');
     }
   }
 
@@ -1339,9 +1605,12 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       _isMeshActive = true;
       _clearMesh();
     }
-    final rotationCompensation = _lastRotationCompensation;
-    if (rotationCompensation != null) {
-      _startMeshStreamIfNeeded(rotationDegrees: rotationCompensation);
+    // Stream mode: start the mesh stream right away if we already have rotation.
+    if (widget.useStreamProcessor) {
+      final rotationCompensation = _lastRotationCompensation;
+      if (rotationCompensation != null) {
+        _startMeshStreamIfNeeded(rotationDegrees: rotationCompensation);
+      }
     }
   }
 }
