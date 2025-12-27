@@ -79,10 +79,7 @@ class CameraPreviewView extends StatelessWidget {
                                   alignment: Alignment.center,
                                   transform: isBackCamera
                                       ? Matrix4.identity()
-                                      : (Platform.isIOS
-                                          ? Matrix4.identity()
-                                          : (Matrix4.identity()
-                                            ..rotateY(math.pi))),
+                                      : Matrix4.identity(),
                                   child: CameraPreview(controller!),
                                 ),
                               )
