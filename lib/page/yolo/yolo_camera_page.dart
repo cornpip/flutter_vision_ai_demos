@@ -4,13 +4,13 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:yolo/common/colors.dart';
+import 'package:yolo/page/yolo/view/camera_preview_view.dart';
+import 'package:yolo/page/yolo/yolo_detector.dart';
+import 'package:yolo/paint/detection_painter.dart';
+import 'package:yolo/page/yolo/widget/camera_control_buttons.dart';
+import 'package:yolo/page/yolo/widget/detection_status_chip.dart';
 
-import '../detector/yolo_detector.dart';
-import '../models/detection.dart';
-import '../widget/camera_control_buttons.dart';
-import '../view/camera_error_view.dart';
-import '../view/camera_preview_view.dart';
-import '../widget/detection_status_chip.dart';
+import 'view/camera_error_view.dart';
 
 class YoloCameraPage extends StatefulWidget {
   const YoloCameraPage({super.key, required this.cameras});
@@ -35,6 +35,8 @@ class _YoloCameraPageState extends State<YoloCameraPage>
   bool _isCameraActive = false;
   bool _isDetectionActive = false;
   int _currentCameraIndex = 0;
+  int? _backCameraIndex;
+  int? _frontCameraIndex;
   bool _isChangingCamera = false;
   bool _isCameraBusy = false;
   bool _useGpuDelegate = false;
@@ -63,7 +65,7 @@ class _YoloCameraPageState extends State<YoloCameraPage>
       if (widget.cameras.isEmpty) {
         throw StateError('No available cameras on this device.');
       }
-      _currentCameraIndex = _preferredCameraIndex;
+      _resolveCameraIndices();
       await _detector.initialize();
     } catch (error) {
       if (mounted) {
@@ -92,14 +94,44 @@ class _YoloCameraPageState extends State<YoloCameraPage>
     );
   }
 
-  int get _preferredCameraIndex {
-    if (widget.cameras.isEmpty) {
-      throw StateError('No cameras found on this device.');
-    }
-    final index = widget.cameras.indexWhere(
-      (camera) => camera.lensDirection == CameraLensDirection.back,
+  void _resolveCameraIndices() {
+    _backCameraIndex = _preferredCameraIndexFor(
+      direction: CameraLensDirection.back,
+      preferredLensType: CameraLensType.wide,
     );
-    return index == -1 ? 0 : index;
+    _frontCameraIndex = _preferredCameraIndexFor(
+      direction: CameraLensDirection.front,
+      preferredLensType: CameraLensType.wide,
+    );
+    if (_backCameraIndex != null) {
+      _currentCameraIndex = _backCameraIndex!;
+    } else if (_frontCameraIndex != null) {
+      _currentCameraIndex = _frontCameraIndex!;
+    } else if (widget.cameras.isNotEmpty) {
+      _currentCameraIndex = 0;
+    }
+  }
+
+  int? _preferredCameraIndexFor({
+    required CameraLensDirection direction,
+    CameraLensType preferredLensType = CameraLensType.wide,
+  }) {
+    if (widget.cameras.isEmpty) {
+      return null;
+    }
+    int? preferred;
+    int? fallback;
+    for (var i = 0; i < widget.cameras.length; i++) {
+      final camera = widget.cameras[i];
+      if (camera.lensDirection != direction) {
+        continue;
+      }
+      fallback ??= i;
+      if (camera.lensType == preferredLensType) {
+        preferred ??= i;
+      }
+    }
+    return preferred ?? fallback;
   }
 
   CameraDescription get _currentCamera => widget.cameras[_currentCameraIndex];
@@ -733,11 +765,20 @@ class _YoloCameraPageState extends State<YoloCameraPage>
         !_isCameraActive) {
       return;
     }
-    final nextIndex = (_currentCameraIndex + 1) % widget.cameras.length;
+    final currentLens = _currentCamera.lensDirection;
+    int? nextIndex;
+    if (currentLens == CameraLensDirection.back) {
+      nextIndex = _frontCameraIndex ?? _backCameraIndex;
+    } else {
+      nextIndex = _backCameraIndex ?? _frontCameraIndex;
+    }
+    if (nextIndex == null || nextIndex == _currentCameraIndex) {
+      return;
+    }
     if (mounted) {
       setState(() {
         _isChangingCamera = true;
-        _currentCameraIndex = nextIndex;
+        _currentCameraIndex = nextIndex!;
       });
     } else {
       _isChangingCamera = true;

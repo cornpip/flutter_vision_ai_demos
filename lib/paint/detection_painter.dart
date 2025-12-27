@@ -1,15 +1,32 @@
+import 'dart:io' show Platform;
 import 'dart:math' as math;
 
+import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
-import '../models/detection.dart';
+class Detection {
+  const Detection({
+    required this.boundingBox,
+    required this.confidence,
+    required this.label,
+  });
+
+  /// Bounding box with normalized coordinates (0-1) relative to the preview.
+  final Rect boundingBox;
+  final double confidence;
+  final String label;
+}
 
 class DetectionPainter extends CustomPainter {
   DetectionPainter({
     required this.detections,
+    required this.lensDirection,
+    this.showConfidence = true,
   });
 
   final List<Detection> detections;
+  final CameraLensDirection lensDirection;
+  final bool showConfidence;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -19,15 +36,18 @@ class DetectionPainter extends CustomPainter {
       ..strokeWidth = 3.0;
 
     for (final detection in detections) {
+      final mirroredBox = _maybeMirror(detection.boundingBox);
       final rect = Rect.fromLTRB(
-        detection.boundingBox.left * size.width,
-        detection.boundingBox.top * size.height,
-        detection.boundingBox.right * size.width,
-        detection.boundingBox.bottom * size.height,
+        mirroredBox.left * size.width,
+        mirroredBox.top * size.height,
+        mirroredBox.right * size.width,
+        mirroredBox.bottom * size.height,
       );
       canvas.drawRect(rect, boxPaint);
 
-      final label = '${detection.label} ${(detection.confidence * 100).toStringAsFixed(1)}%';
+      final label = showConfidence
+          ? '${detection.label} ${(detection.confidence * 100).toStringAsFixed(1)}%'
+          : detection.label;
       final textSpan = TextSpan(
         text: label,
         style: const TextStyle(
@@ -59,8 +79,24 @@ class DetectionPainter extends CustomPainter {
     }
   }
 
+  Rect _maybeMirror(Rect box) {
+    if (Platform.isIOS || lensDirection != CameraLensDirection.front) {
+      return box;
+    }
+    final double mirroredLeft = (1 - box.right).clamp(0.0, 1.0);
+    final double mirroredRight = (1 - box.left).clamp(0.0, 1.0);
+    return Rect.fromLTRB(
+      mirroredLeft,
+      box.top,
+      mirroredRight,
+      box.bottom,
+    );
+  }
+
   @override
   bool shouldRepaint(covariant DetectionPainter oldDelegate) {
-    return oldDelegate.detections != detections;
+    return oldDelegate.detections != detections ||
+        oldDelegate.lensDirection != lensDirection ||
+        oldDelegate.showConfidence != showConfidence;
   }
 }

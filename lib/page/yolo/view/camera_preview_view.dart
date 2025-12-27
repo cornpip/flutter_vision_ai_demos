@@ -1,9 +1,10 @@
 import 'dart:math' as math;
+import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:yolo/models/detection.dart';
+import 'package:yolo/page/yolo/yolo_detector.dart';
 import 'package:yolo/paint/detection_painter.dart';
 
 class CameraPreviewView extends StatelessWidget {
@@ -78,8 +79,7 @@ class CameraPreviewView extends StatelessWidget {
                                   alignment: Alignment.center,
                                   transform: isBackCamera
                                       ? Matrix4.identity()
-                                      : (Matrix4.identity()
-                                        ..rotateY(math.pi)),
+                                      : Matrix4.identity(),
                                   child: CameraPreview(controller!),
                                 ),
                               )
@@ -104,7 +104,11 @@ class CameraPreviewView extends StatelessWidget {
                                   child: CustomPaint(
                                     isComplex: true,
                                     painter: DetectionPainter(
-                                        detections: detections),
+                                      detections: detections,
+                                      lensDirection: controller?.description
+                                              .lensDirection ??
+                                          CameraLensDirection.back,
+                                    ),
                                   ),
                                 ),
                               ),

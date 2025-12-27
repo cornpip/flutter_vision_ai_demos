@@ -27,20 +27,20 @@ class DemoButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 72.h,
-      child: FilledButton(
-        style: FilledButton.styleFrom(
-          padding: EdgeInsets.symmetric(horizontal: 20.w),
-          alignment: Alignment.centerLeft,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12.sp),
-          ),
+    return FilledButton(
+      style: FilledButton.styleFrom(
+        padding: EdgeInsets.symmetric(horizontal: 20.w),
+        alignment: Alignment.centerLeft,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12.sp),
         ),
-        onPressed: enabled ? onTap : null,
-        child: Row(
-          children: [
-            Expanded(
+      ),
+      onPressed: enabled ? onTap : null,
+      child: Row(
+        children: [
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 12.h),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -60,9 +60,9 @@ class DemoButton extends StatelessWidget {
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right),
-          ],
-        ),
+          ),
+          const Icon(Icons.chevron_right),
+        ],
       ),
     );
   }

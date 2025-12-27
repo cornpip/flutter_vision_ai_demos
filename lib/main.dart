@@ -3,8 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
 
-import 'page/main_page.dart';
-import 'page/yolo_camera_page.dart';
+import 'page/main/main_page.dart';
+import 'page/yolo/yolo_camera_page.dart';
+import 'page/mediapipe_face/mediapipe_face_page.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,8 +25,12 @@ class YoloApp extends StatelessWidget {
         builder: (context, state) => MainPage(cameras: cameras),
       ),
       GoRoute(
-        path: '/camera',
+        path: '/yolo11',
         builder: (context, state) => YoloCameraPage(cameras: cameras),
+      ),
+      GoRoute(
+        path: '/mediapipe_face',
+        builder: (context, state) => MediaPipeFacePage(cameras: cameras),
       ),
     ],
   );
@@ -44,4 +49,3 @@ class YoloApp extends StatelessWidget {
     );
   }
 }
-

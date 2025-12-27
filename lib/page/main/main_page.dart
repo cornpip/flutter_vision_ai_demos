@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
 import 'package:yolo/common/colors.dart';
-import 'package:yolo/widget/demo_button.dart';
+import 'package:yolo/page/main/widget/demo_button.dart';
 
 class MainPage extends StatelessWidget {
   const MainPage({super.key, required this.cameras});
@@ -15,9 +15,14 @@ class MainPage extends StatelessWidget {
     final hasCamera = cameras.isNotEmpty;
     final demoItems = [
       const DemoItem(
-        title: 'YOLOv11n realtime',
-        subtitle: 'Detect objects with the camera',
-        route: '/camera',
+        title: 'YOLOv11n',
+        subtitle: 'detect objects',
+        route: '/yolo11',
+      ),
+      const DemoItem(
+        title: 'MediaPipe FaceMesh',
+        subtitle: 'face detect & mesh',
+        route: '/mediapipe_face',
       ),
     ];
 
@@ -52,7 +57,7 @@ class MainPage extends StatelessWidget {
               itemBuilder: (context, index) {
                 final item = demoItems[index];
                 return Padding(
-                  padding: EdgeInsets.only(top: 15.w),
+                  padding: EdgeInsets.only(top: 10.h,),
                   child: DemoButton(
                     item: item,
                     enabled: hasCamera,
