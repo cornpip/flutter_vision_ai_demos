@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
 import 'package:yolo/common/colors.dart';
-import 'package:yolo/widget/demo_button.dart';
+import 'package:yolo/page/main/widget/demo_button.dart';
 
 class MainPage extends StatelessWidget {
   const MainPage({super.key, required this.cameras});

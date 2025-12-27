@@ -4,13 +4,13 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:yolo/common/colors.dart';
+import 'package:yolo/page/yolo/view/camera_preview_view.dart';
+import 'package:yolo/page/yolo/yolo_detector.dart';
+import 'package:yolo/paint/detection_painter.dart';
+import 'package:yolo/page/yolo/widget/camera_control_buttons.dart';
+import 'package:yolo/page/yolo/widget/detection_status_chip.dart';
 
-import '../detector/yolo_detector.dart';
-import '../models/detection.dart';
-import '../widget/camera_control_buttons.dart';
-import '../view/camera_error_view.dart';
-import '../view/camera_preview_view.dart';
-import '../widget/detection_status_chip.dart';
+import 'view/camera_error_view.dart';
 
 class YoloCameraPage extends StatefulWidget {
   const YoloCameraPage({super.key, required this.cameras});

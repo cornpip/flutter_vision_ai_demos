@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:yolo/models/detection.dart';
+import 'package:yolo/page/yolo/yolo_detector.dart';
 import 'package:yolo/paint/detection_painter.dart';
 
 class CameraPreviewView extends StatelessWidget {

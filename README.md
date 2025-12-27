@@ -7,9 +7,6 @@
 - This dependency is a plugin used for image processing
 - image processing is implemented in FFI(C++/OpenCV)
 
-## version
-- flutter: 3.38.4
-
 ## support
 - Android
 - iOS

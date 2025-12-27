@@ -10,13 +10,13 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:mediapipe_face_mesh/face_mesh_stream_processor.dart';
 import 'package:mediapipe_face_mesh/mediapipe_face_mesh.dart';
-import 'package:yolo/common/input_image_converter.dart';
+import 'package:yolo/page/mediapipe_face/input_image_converter.dart';
+import 'package:yolo/page/yolo/yolo_detector.dart';
 
-import '../common/colors.dart';
-import '../models/detection.dart';
-import '../paint/detection_painter.dart';
-import '../paint/face_mesh_painter.dart';
-import '../view/camera_error_view.dart';
+import '../../common/colors.dart';
+import '../../paint/detection_painter.dart';
+import 'paint/face_mesh_painter.dart';
+import '../yolo/view/camera_error_view.dart';
 
 class MediaPipeFacePage extends StatefulWidget {
   const MediaPipeFacePage({

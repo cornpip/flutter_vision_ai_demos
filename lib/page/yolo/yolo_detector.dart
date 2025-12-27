@@ -10,8 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:ffi_plugin_look/ffi_plugin_look.dart' as native_processing;
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
-
-import '../models/detection.dart';
+import 'package:yolo/paint/detection_painter.dart';
 
 class YoloDetector {
   YoloDetector({
