@@ -73,7 +73,7 @@ class FaceMeshPainter extends CustomPainter {
         break;
     }
 
-    if (Platform.isIOS && lensDirection == CameraLensDirection.front) {
+    if (!Platform.isIOS && lensDirectiosn == CameraLensDirection.front) {
       xOut = 1.0 - xOut;
     }
 

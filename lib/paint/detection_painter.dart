@@ -69,7 +69,7 @@ class DetectionPainter extends CustomPainter {
   }
 
   Rect _maybeMirror(Rect box) {
-    if (!Platform.isIOS || lensDirection != CameraLensDirection.front) {
+    if (Platform.isIOS || lensDirection != CameraLensDirection.front) {
       return box;
     }
     final double mirroredLeft = (1 - box.right).clamp(0.0, 1.0);

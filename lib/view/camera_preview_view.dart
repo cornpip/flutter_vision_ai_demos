@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
@@ -78,8 +79,10 @@ class CameraPreviewView extends StatelessWidget {
                                   alignment: Alignment.center,
                                   transform: isBackCamera
                                       ? Matrix4.identity()
-                                      : (Matrix4.identity()
-                                        ..rotateY(math.pi)),
+                                      : (Platform.isIOS
+                                          ? Matrix4.identity()
+                                          : (Matrix4.identity()
+                                            ..rotateY(math.pi))),
                                   child: CameraPreview(controller!),
                                 ),
                               )
