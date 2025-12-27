@@ -60,7 +60,8 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
   int? _meshRotationCompensation;
   CameraLensDirection? _meshLensDirection;
   late final FaceDetector _faceDetector;
-  MediapipeFaceMesh? _faceMesh;
+  FaceMeshProcessor? _faceMesh;
+
   final InputImageConverter _inputImageConverter = InputImageConverter();
 
   @override
@@ -89,7 +90,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         _currentCameraIndex = 0;
       }
 
-      final mesh = await MediapipeFaceMesh.create();
+      final mesh = await FaceMeshProcessor.create();
       setState(() {
         _faceMesh = mesh;
       });
@@ -963,7 +964,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
   }
 
   FaceMeshResult? _runFaceMeshOnAndroidNv21({
-    required MediapipeFaceMesh mesh,
+    required FaceMeshProcessor mesh,
     required CameraImage cameraImage,
     required CameraController controller,
     required CameraDescription camera,
@@ -1111,7 +1112,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
   }
 
   FaceMeshResult? _runFaceMeshOnIosBgra({
-    required MediapipeFaceMesh mesh,
+    required FaceMeshProcessor mesh,
     required CameraImage cameraImage,
     required Face face,
     required int? rotationCompensationDegrees,
