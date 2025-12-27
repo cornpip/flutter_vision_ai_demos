@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -6,8 +7,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:mediapipe_face_mesh/face_mesh_stream_processor.dart';
 import 'package:mediapipe_face_mesh/mediapipe_face_mesh.dart';
 import 'package:yolo/common/input_image_converter.dart';
 
@@ -18,9 +19,14 @@ import '../paint/face_mesh_painter.dart';
 import '../view/camera_error_view.dart';
 
 class MediaPipeFacePage extends StatefulWidget {
-  const MediaPipeFacePage({super.key, required this.cameras});
+  const MediaPipeFacePage({
+    super.key,
+    required this.cameras,
+    this.useStreamProcessor = true,
+  });
 
   final List<CameraDescription> cameras;
+  final bool useStreamProcessor;
 
   @override
   State<MediaPipeFacePage> createState() => _MediaPipeFacePageState();
@@ -58,22 +64,21 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
   List<Detection> _detections = const [];
   FaceMeshResult? _meshResult;
   int? _meshRotationCompensation;
-  CameraLensDirection? _meshLensDirection;
   late final FaceDetector _faceDetector;
-  FaceMeshProcessor? _faceMesh;
-
+  late final FaceMeshProcessor _faceMeshProcessor;
+  late final FaceMeshStreamProcessor _faceMeshStreamProcessor;
+  StreamController<FaceMeshNv21Image>? _nv21StreamController;
+  StreamController<FaceMeshImage>? _bgraStreamController;
+  StreamSubscription<FaceMeshResult>? _meshStreamSubscription;
+  Rect? _latestFaceBoundingBox;
+  int? _lastRotationCompensation;
+  int? _meshStreamRotation;
+  bool _isMeshStreamBusy = false;
   final InputImageConverter _inputImageConverter = InputImageConverter();
 
   @override
   void initState() {
     super.initState();
-    _faceDetector = FaceDetector(
-      options: FaceDetectorOptions(
-        enableContours: true,
-        enableClassification: true,
-        performanceMode: FaceDetectorMode.fast,
-      ),
-    );
     WidgetsBinding.instance.addObserver(this);
     _initialize();
   }
@@ -90,10 +95,26 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         _currentCameraIndex = 0;
       }
 
-      final mesh = await FaceMeshProcessor.create();
-      setState(() {
-        _faceMesh = mesh;
-      });
+      // faceDetector init
+      _faceDetector = FaceDetector(
+        options: FaceDetectorOptions(
+          enableContours: true,
+          enableClassification: true,
+          performanceMode: FaceDetectorMode.fast,
+        ),
+      );
+
+      // faceMeshProcessor init
+      final faceMeshProcessor = await FaceMeshProcessor.create();
+      if (mounted) {
+        setState(() {
+          _faceMeshProcessor = faceMeshProcessor;
+          _faceMeshStreamProcessor = FaceMeshStreamProcessor(faceMeshProcessor);
+        });
+      } else {
+        _faceMeshProcessor = faceMeshProcessor;
+        _faceMeshStreamProcessor = FaceMeshStreamProcessor(faceMeshProcessor);
+      }
     } catch (error) {
       _errorMessage = '$error';
     } finally {
@@ -245,12 +266,84 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
   void _clearDetections() {
     _detections = const [];
     _isProcessingFrame = false;
+    _latestFaceBoundingBox = null;
+    _lastRotationCompensation = null;
   }
 
   void _clearMesh() {
     _meshResult = null;
     _meshRotationCompensation = null;
-    _meshLensDirection = null;
+  }
+
+  void _stopMeshStream() {
+    _meshStreamSubscription?.cancel();
+    _meshStreamSubscription = null;
+    _nv21StreamController?.close();
+    _bgraStreamController?.close();
+    _nv21StreamController = null;
+    _bgraStreamController = null;
+    _meshStreamRotation = null;
+    _isMeshStreamBusy = false;
+  }
+
+  void _startMeshStreamIfNeeded({required int rotationDegrees}) {
+    if (_meshStreamSubscription != null &&
+        _meshStreamRotation == rotationDegrees) {
+      return;
+    }
+    _stopMeshStream();
+    _meshStreamRotation = rotationDegrees;
+
+    if (Platform.isAndroid) {
+      _nv21StreamController = StreamController<FaceMeshNv21Image>();
+      _meshStreamSubscription = _faceMeshStreamProcessor
+          .processNv21(
+            _nv21StreamController!.stream,
+            boxResolver: _resolveFaceMeshBoxForNv21,
+            boxScale: 1.2,
+            boxMakeSquare: true,
+            rotationDegrees: rotationDegrees,
+          )
+          .listen(_handleMeshResult, onError: _handleMeshError);
+    } else if (Platform.isIOS) {
+      _bgraStreamController = StreamController<FaceMeshImage>();
+      _meshStreamSubscription = _faceMeshStreamProcessor
+          .processImages(
+            _bgraStreamController!.stream,
+            boxResolver: _resolveFaceMeshBoxForBgra,
+            boxScale: 1.2,
+            boxMakeSquare: true,
+            rotationDegrees: rotationDegrees,
+          )
+          .listen(_handleMeshResult, onError: _handleMeshError);
+    }
+  }
+
+  void _handleMeshResult(FaceMeshResult result) {
+    _isMeshStreamBusy = false;
+    if (!_isMeshActive) {
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _meshResult = result;
+        _meshRotationCompensation = 0; // already reflected
+      });
+    } else {
+      _meshResult = result;
+      _meshRotationCompensation = 0;
+    }
+  }
+
+  void _handleMeshError(Object error) {
+    _isMeshStreamBusy = false;
+    if (mounted) {
+      setState(() {
+        _errorMessage ??= '$error';
+      });
+    } else {
+      _errorMessage ??= '$error';
+    }
   }
 
   Future<void> _reinitializeCurrentCamera() async {
@@ -285,6 +378,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
           _isDetectionActive = false;
           _isMeshActive = false;
           _clearMesh();
+          _stopMeshStream();
           _clearDetections();
           _clearCameraFps();
         });
@@ -294,6 +388,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         _isDetectionActive = false;
         _isMeshActive = false;
         _clearMesh();
+        _stopMeshStream();
         _clearDetections();
         _clearCameraFps();
       }
@@ -310,7 +405,8 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     WidgetsBinding.instance.removeObserver(this);
     _cameraController?.dispose();
     _faceDetector.close();
-    _faceMesh?.close();
+    _stopMeshStream();
+    _faceMeshProcessor.close();
     super.dispose();
   }
 
@@ -472,16 +568,16 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
                               Positioned.fill(
                                 child: RepaintBoundary(
                                 child: IgnorePointer(
-                                    child: CustomPaint(
-                                      isComplex: true,
-                                      painter: FaceMeshPainter(
-                                        result: _meshResult!,
-                                        rotationCompensation:
-                                            _meshRotationCompensation ?? 0,
-                                        lensDirection: _meshLensDirection ??
-                                            CameraLensDirection.back,
-                                      ),
+                                  child: CustomPaint(
+                                    isComplex: true,
+                                    painter: FaceMeshPainter(
+                                      result: _meshResult!,
+                                      rotationCompensation:
+                                          _meshRotationCompensation ?? 0,
+                                      lensDirection:
+                                          controller.description.lensDirection,
                                     ),
+                                  ),
                                   ),
                                 ),
                               ),
@@ -606,8 +702,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
                   onPressed: (!_isCameraActive ||
                           _isCameraBusy ||
                           !isControllerReady ||
-                          !_isDetectionActive ||
-                          _faceMesh == null)
+                      !_isDetectionActive)
                       ? null
                       : _toggleMesh,
                   style: ElevatedButton.styleFrom(
@@ -671,6 +766,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         _isDetectionActive = false;
         _isMeshActive = false;
         _clearMesh();
+        _stopMeshStream();
         _clearDetections();
       });
     } else {
@@ -679,6 +775,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       _isDetectionActive = false;
       _isMeshActive = false;
       _clearMesh();
+      _stopMeshStream();
       _clearDetections();
     }
     try {
@@ -712,6 +809,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
           _isDetectionActive = false;
           _isMeshActive = false;
           _clearMesh();
+          _stopMeshStream();
           _clearCameraFps();
           _clearDetections();
         });
@@ -720,6 +818,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         _isDetectionActive = false;
         _isMeshActive = false;
         _clearMesh();
+        _stopMeshStream();
         _clearCameraFps();
         _clearDetections();
       }
@@ -732,6 +831,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
         _isDetectionActive = false;
         _isMeshActive = false;
         _clearMesh();
+        _stopMeshStream();
         _clearCameraFps();
         _clearDetections();
       });
@@ -741,6 +841,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       _isDetectionActive = false;
       _isMeshActive = false;
       _clearMesh();
+      _stopMeshStream();
       _clearCameraFps();
       _clearDetections();
     }
@@ -835,46 +936,49 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     CameraController controller,
   ) async {
     try {
+      int? rotationCompensation = _rotationCompensationDegrees(
+          controller: controller);
+      if (rotationCompensation == null) return;
+      InputImageRotation inputImageRotation = InputImageRotationValue
+          .fromRawValue(rotationCompensation)!;
+
       final inputImage = _inputImageConverter.fromCameraImage(
         image: cameraImage,
         controller: controller,
         camera: _currentCamera,
+        inputImageRotation: inputImageRotation,
       );
       if (inputImage == null) {
         return;
       }
+
+      // face detection process
       final faces = await _faceDetector.processImage(inputImage);
       if (!mounted || !_isCameraActive || !_isDetectionActive) {
         return;
       }
 
+      _latestFaceBoundingBox =
+          faces.isNotEmpty ? faces.first.boundingBox : null;
+      _lastRotationCompensation = rotationCompensation;
+
       FaceMeshResult? meshResult;
-      int? meshRotationCompensation;
-      if (_isMeshActive && faces.isNotEmpty) {
-        final mesh = _faceMesh;
-        if (mesh != null) {
+      // Per-frame mesh inference
+      if (!widget.useStreamProcessor) {
+        if (_isMeshActive && faces.isNotEmpty) {
           if (Platform.isAndroid) {
-            meshRotationCompensation = _rotationCompensationDegrees(
-              controller: controller,
-              camera: _currentCamera,
-            );
             meshResult = _runFaceMeshOnAndroidNv21(
-              mesh: mesh,
+              mesh: _faceMeshProcessor,
               cameraImage: cameraImage,
-              controller: controller,
-              camera: _currentCamera,
               face: faces.first,
-              rotationCompensationDegrees: meshRotationCompensation,
+              rotationCompensationDegrees: rotationCompensation,
             );
           } else if (Platform.isIOS) {
-            meshRotationCompensation = _inputImageConverter
-                .rotationFor(controller: controller, camera: _currentCamera)
-                ?.rawValue;
             meshResult = _runFaceMeshOnIosBgra(
-              mesh: mesh,
+              mesh: _faceMeshProcessor,
               cameraImage: cameraImage,
               face: faces.first,
-              rotationCompensationDegrees: meshRotationCompensation,
+              rotationCompensationDegrees: rotationCompensation,
             );
           }
           if (meshResult != null) {
@@ -888,32 +992,34 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
           }
         }
       }
-
-      // detection
-      final rotation = _inputImageConverter.rotationFor(
-        controller: controller,
-        camera: _currentCamera,
-      );
-      if (rotation == null) {
-        return;
+      // Stream-based mesh processing
+      else if (_isMeshActive && faces.isNotEmpty) {
+        _enqueueMeshFrame(
+          cameraImage: cameraImage,
+          rotationCompensationDegrees: rotationCompensation,
+        );
       }
+
+      // detection data process
       final detections = _mapFacesToDetections(
         faces: faces,
         imageSize: Size(
           cameraImage.width.toDouble(),
           cameraImage.height.toDouble(),
         ),
-        rotation: rotation,
+        rotation: inputImageRotation,
         lensDirection: controller.description.lensDirection,
       );
       if (mounted) {
         setState(() {
           _detections = detections;
-          if (_isMeshActive) {
+          if (!widget.useStreamProcessor && _isMeshActive) {
             _meshResult = meshResult;
-            // Mesh output is already expressed in the rotated coordinate system.
-            _meshRotationCompensation = 0;
-            _meshLensDirection = controller.description.lensDirection;
+            _meshRotationCompensation = meshResult != null ? 0 : null;
+          } else if (!_isMeshActive || faces.isEmpty) {
+            // Stream mode: results are handled by _handleMeshResult.
+            _meshResult = null;
+            _meshRotationCompensation = null;
           }
         });
       }
@@ -934,6 +1040,47 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       return Size(imageSize.height, imageSize.width);
     }
     return imageSize;
+  }
+
+  void _logNv21Layout(CameraImage cameraImage) {
+    final now = DateTime.now();
+    final lastLayoutLog = _lastNv21LayoutLogTime;
+    if (lastLayoutLog != null &&
+        now.difference(lastLayoutLog) < const Duration(seconds: 1)) {
+      return;
+    }
+    _lastNv21LayoutLogTime = now;
+    debugPrint(
+      '[NV21 Layout] img=${cameraImage.width}x${cameraImage.height}'
+          ' group=${cameraImage.format.group} raw=${cameraImage.format.raw}'
+          ' planes=${cameraImage.planes.length}',
+    );
+    for (var i = 0; i < cameraImage.planes.length; i++) {
+      final p = cameraImage.planes[i];
+      debugPrint(
+        '[NV21 Layout] plane$i'
+            ' bytes=${p.bytes.length}'
+            ' bytesPerRow=${p.bytesPerRow}'
+            ' bytesPerPixel=${p.bytesPerPixel}'
+            ' w=${p.width}'
+            ' h=${p.height}',
+      );
+    }
+    if (cameraImage.planes.length == 1) {
+      final p0 = cameraImage.planes.first;
+      final chromaHeight = (cameraImage.height + 1) ~/ 2;
+      final expectedY = p0.bytesPerRow * cameraImage.height;
+      final expectedVu = p0.bytesPerRow * chromaHeight;
+      final expectedTotal = expectedY + expectedVu;
+      debugPrint(
+        '[NV21 Layout] planes=1 expected'
+            ' chromaHeight=$chromaHeight'
+            ' ySize=$expectedY'
+            ' vuSize=$expectedVu'
+            ' total=$expectedTotal'
+            ' actual=${p0.bytes.length}',
+      );
+    }
   }
 
   List<Detection> _mapFacesToDetections({
@@ -963,55 +1110,15 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     }).toList();
   }
 
-  FaceMeshResult? _runFaceMeshOnAndroidNv21({
-    required FaceMeshProcessor mesh,
+  FaceMeshNv21Image? _buildNv21Image({
     required CameraImage cameraImage,
-    required CameraController controller,
-    required CameraDescription camera,
-    required Face face,
-    required int? rotationCompensationDegrees,
   }) {
     if (!Platform.isAndroid) {
       return null;
     }
 
-    final now = DateTime.now();
-    final lastLayoutLog = _lastNv21LayoutLogTime;
-    if (lastLayoutLog == null ||
-        now.difference(lastLayoutLog) >= const Duration(seconds: 1)) {
-      _lastNv21LayoutLogTime = now;
-      debugPrint(
-        '[NV21 Layout] img=${cameraImage.width}x${cameraImage.height}'
-        ' group=${cameraImage.format.group} raw=${cameraImage.format.raw}'
-        ' planes=${cameraImage.planes.length}',
-      );
-      for (var i = 0; i < cameraImage.planes.length; i++) {
-        final p = cameraImage.planes[i];
-        debugPrint(
-          '[NV21 Layout] plane$i'
-          ' bytes=${p.bytes.length}'
-          ' bytesPerRow=${p.bytesPerRow}'
-          ' bytesPerPixel=${p.bytesPerPixel}'
-          ' w=${p.width}'
-          ' h=${p.height}',
-        );
-      }
-      if (cameraImage.planes.length == 1) {
-        final p0 = cameraImage.planes.first;
-        final chromaHeight = (cameraImage.height + 1) ~/ 2;
-        final expectedY = p0.bytesPerRow * cameraImage.height;
-        final expectedVu = p0.bytesPerRow * chromaHeight;
-        final expectedTotal = expectedY + expectedVu;
-        debugPrint(
-          '[NV21 Layout] planes=1 expected'
-          ' chromaHeight=$chromaHeight'
-          ' ySize=$expectedY'
-          ' vuSize=$expectedVu'
-          ' total=$expectedTotal'
-          ' actual=${p0.bytes.length}',
-        );
-      }
-    }
+    // debug
+    _logNv21Layout(cameraImage);
 
     final planes = cameraImage.planes;
     if (planes.isEmpty) {
@@ -1046,7 +1153,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       vuBytesPerRow = rowStride;
     }
 
-    final FaceMeshNv21Image nv21 = FaceMeshNv21Image(
+    return FaceMeshNv21Image(
       yPlane: yPlane,
       vuPlane: vuPlane,
       width: cameraImage.width,
@@ -1054,6 +1161,42 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       yBytesPerRow: yBytesPerRow,
       vuBytesPerRow: vuBytesPerRow,
     );
+  }
+
+  FaceMeshImage? _buildBgraImage({
+    required CameraImage cameraImage,
+  }) {
+    if (!Platform.isIOS) {
+      return null;
+    }
+    final planes = cameraImage.planes;
+    if (planes.isEmpty) {
+      return null;
+    }
+    final Plane plane = planes.first;
+    return FaceMeshImage(
+      pixels: plane.bytes,
+      width: cameraImage.width,
+      height: cameraImage.height,
+      bytesPerRow: plane.bytesPerRow,
+      pixelFormat: FaceMeshPixelFormat.bgra,
+    );
+  }
+
+  FaceMeshResult? _runFaceMeshOnAndroidNv21({
+    required FaceMeshProcessor mesh,
+    required CameraImage cameraImage,
+    required Face face,
+    required int? rotationCompensationDegrees,
+  }) {
+    if (!Platform.isAndroid) {
+      return null;
+    }
+
+    final nv21 = _buildNv21Image(cameraImage: cameraImage);
+    if (nv21 == null) {
+      return null;
+    }
 
     final rotationCompensation = rotationCompensationDegrees;
     if (rotationCompensation == null) {
@@ -1065,9 +1208,6 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       return null;
     }
 
-    // ML Kit returns bounding boxes in the coordinate system after applying
-    // `rotationCompensation`. Use that box directly and let the native mesh
-    // implementation apply the same rotation metadata to NV21 sampling.
     final adjustedSize = _adjustedImageSize(
       Size(cameraImage.width.toDouble(), cameraImage.height.toDouble()),
       inputImageRotation,
@@ -1120,8 +1260,8 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     if (!Platform.isIOS) {
       return null;
     }
-    final planes = cameraImage.planes;
-    if (planes.isEmpty) {
+    final image = _buildBgraImage(cameraImage: cameraImage);
+    if (image == null) {
       return null;
     }
     final rotationCompensation = rotationCompensationDegrees;
@@ -1133,14 +1273,6 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     if (inputImageRotation == null) {
       return null;
     }
-    final Plane plane = planes.first;
-    final FaceMeshImage image = FaceMeshImage(
-      pixels: plane.bytes,
-      width: cameraImage.width,
-      height: cameraImage.height,
-      bytesPerRow: plane.bytesPerRow,
-      pixelFormat: FaceMeshPixelFormat.bgra,
-    );
     final adjustedSize = _adjustedImageSize(
       Size(cameraImage.width.toDouble(), cameraImage.height.toDouble()),
       inputImageRotation,
@@ -1167,18 +1299,83 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     );
   }
 
-  int? _rotationCompensationDegrees({
-    required CameraController controller,
-    required CameraDescription camera,
+  FaceMeshBox? _resolveFaceMeshBoxForNv21(FaceMeshNv21Image frame) {
+    return _resolveFaceMeshBox(
+      width: frame.width,
+      height: frame.height,
+      rotationDegrees: _meshStreamRotation,
+    );
+  }
+
+  FaceMeshBox? _resolveFaceMeshBoxForBgra(FaceMeshImage frame) {
+    return _resolveFaceMeshBox(
+      width: frame.width,
+      height: frame.height,
+      rotationDegrees: _meshStreamRotation,
+    );
+  }
+
+  FaceMeshBox? _resolveFaceMeshBox({
+    required int width,
+    required int height,
+    required int? rotationDegrees,
   }) {
-    final deviceRotation = _deviceOrientationDegrees[controller.value.deviceOrientation];
-    if (deviceRotation == null) {
+    final bbox = _latestFaceBoundingBox;
+    if (bbox == null || rotationDegrees == null) {
       return null;
     }
-    if (camera.lensDirection == CameraLensDirection.front) {
-      return (camera.sensorOrientation + deviceRotation) % 360;
+    final inputImageRotation =
+        InputImageRotationValue.fromRawValue(rotationDegrees);
+    if (inputImageRotation == null) {
+      return null;
     }
-    return (camera.sensorOrientation - deviceRotation + 360) % 360;
+    final adjustedSize = _adjustedImageSize(
+      Size(width.toDouble(), height.toDouble()),
+      inputImageRotation,
+    );
+    final clamped = Rect.fromLTRB(
+      bbox.left.clamp(0.0, adjustedSize.width),
+      bbox.top.clamp(0.0, adjustedSize.height),
+      bbox.right.clamp(0.0, adjustedSize.width),
+      bbox.bottom.clamp(0.0, adjustedSize.height),
+    );
+    return FaceMeshBox.fromLTWH(
+      left: clamped.left,
+      top: clamped.top,
+      width: clamped.width,
+      height: clamped.height,
+    );
+  }
+
+  void _enqueueMeshFrame({
+    required CameraImage cameraImage,
+    required int rotationCompensationDegrees,
+  }) {
+    if (_latestFaceBoundingBox == null || _isMeshStreamBusy) {
+      return;
+    }
+    _startMeshStreamIfNeeded(rotationDegrees: rotationCompensationDegrees);
+    if (!_isMeshActive) {
+      return;
+    }
+
+    if (Platform.isAndroid) {
+      final controller = _nv21StreamController;
+      final frame = _buildNv21Image(cameraImage: cameraImage);
+      if (controller == null || controller.isClosed || frame == null) {
+        return;
+      }
+      _isMeshStreamBusy = true;
+      controller.add(frame);
+    } else if (Platform.isIOS) {
+      final controller = _bgraStreamController;
+      final frame = _buildBgraImage(cameraImage: cameraImage);
+      if (controller == null || controller.isClosed || frame == null) {
+        return;
+      }
+      _isMeshStreamBusy = true;
+      controller.add(frame);
+    }
   }
 
   void _logMeshResult({
@@ -1289,6 +1486,27 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     }
   }
 
+  int? _rotationCompensationDegrees({
+    required CameraController controller,
+  }) {
+    if (Platform.isAndroid) {
+      int? deviceRotation = _deviceOrientationDegrees[controller.value
+          .deviceOrientation];
+      if (deviceRotation == null) return null;
+
+      if (_currentCamera.lensDirection == CameraLensDirection.front) {
+        return (_currentCamera.sensorOrientation + deviceRotation) % 360;
+      }
+      return (_currentCamera.sensorOrientation - deviceRotation + 360) % 360;
+    }
+
+    if (Platform.isIOS) {
+      return _deviceOrientationDegrees[controller.value.deviceOrientation];
+    }
+
+    return null;
+  }
+
   Future<void> _toggleDetection() async {
     final controller = _cameraController;
     if (controller == null ||
@@ -1303,12 +1521,14 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
           _isDetectionActive = false;
           _isMeshActive = false;
           _clearMesh();
+          _stopMeshStream();
           _clearDetections();
         });
       } else {
         _isDetectionActive = false;
         _isMeshActive = false;
         _clearMesh();
+        _stopMeshStream();
         _clearDetections();
       }
       return;
@@ -1346,6 +1566,8 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     if (controller == null || !controller.value.isInitialized) {
       return;
     }
+
+    // detecting priority
     if (!_isDetectionActive) {
       if (mounted) {
         setState(() {
@@ -1356,23 +1578,24 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       }
       return;
     }
-    if (_faceMesh == null) {
-      return;
-    }
 
+    // mesh stop
     if (_isMeshActive) {
       if (mounted) {
         setState(() {
           _isMeshActive = false;
           _clearMesh();
+          _stopMeshStream();
         });
       } else {
         _isMeshActive = false;
         _clearMesh();
+        _stopMeshStream();
       }
       return;
     }
 
+    // mesh start
     if (mounted) {
       setState(() {
         _isMeshActive = true;
@@ -1381,6 +1604,13 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     } else {
       _isMeshActive = true;
       _clearMesh();
+    }
+    // Stream mode: start the mesh stream right away if we already have rotation.
+    if (widget.useStreamProcessor) {
+      final rotationCompensation = _lastRotationCompensation;
+      if (rotationCompensation != null) {
+        _startMeshStreamIfNeeded(rotationDegrees: rotationCompensation);
+      }
     }
   }
 }
