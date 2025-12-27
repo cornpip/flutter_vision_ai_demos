@@ -15,13 +15,13 @@ class MainPage extends StatelessWidget {
     final hasCamera = cameras.isNotEmpty;
     final demoItems = [
       const DemoItem(
-        title: 'YOLOv11n realtime',
-        subtitle: 'Detect objects with the camera',
+        title: 'YOLOv11n',
+        subtitle: 'detect objects',
         route: '/yolo11',
       ),
       const DemoItem(
-        title: 'MediaPipe Face',
-        subtitle: 'mlkit face detect + mediapipe face mesh',
+        title: 'MediaPipe FaceMesh',
+        subtitle: 'face detect & mesh',
         route: '/mediapipe_face',
       ),
     ];
