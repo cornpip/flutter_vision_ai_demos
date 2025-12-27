@@ -132,9 +132,11 @@ packages:
   ffi_plugin_look:
     dependency: "direct main"
     description:
-      path: "../ffi_plugin_test"
-      relative: true
-    source: path
+      path: "."
+      ref: master
+      resolved-ref: f744b856b0317f0e818ba1ac3df90c6df6bdb9d2
+      url: "https://github.com/cornpip/ffi_plugin_test.git"
+    source: git
     version: "0.0.1"
   flutter:
     dependency: "direct main"
@@ -266,10 +268,11 @@ packages:
   mediapipe_face_mesh:
     dependency: "direct main"
     description:
-      path: "../mediapipe_face_mesh"
-      relative: true
-    source: path
-    version: "1.0.0"
+      name: mediapipe_face_mesh
+      sha256: a87ce45269b1c3d536c9d7db29be38a4efc4ae5ad38f26d8a60516198617d03f
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.1"
   meta:
     dependency: transitive
     description:
