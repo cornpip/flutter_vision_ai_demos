@@ -105,7 +105,9 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
       );
 
       // faceMeshProcessor init
-      final faceMeshProcessor = await FaceMeshProcessor.create();
+      final faceMeshProcessor = await FaceMeshProcessor.create(
+        delegate: FaceMeshDelegate.xnnpack // FaceMeshDelegate.cpu is default
+      );
       if (mounted) {
         setState(() {
           _faceMeshProcessor = faceMeshProcessor;
