@@ -1,4 +1,4 @@
-# Flutter Realtime Vision Demos
+# Flutter Vision AI Demos
 
 ## support
 - Android
