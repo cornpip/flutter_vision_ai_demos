@@ -310,7 +310,7 @@ class _MediaPipeFacePageState extends State<MediaPipeFacePage>
     } else if (Platform.isIOS) {
       _bgraStreamController = StreamController<FaceMeshImage>();
       _meshStreamSubscription = _faceMeshStreamProcessor
-          .processImages(
+          .process(
             _bgraStreamController!.stream,
             boxResolver: _resolveFaceMeshBoxForBgra,
             boxScale: 1.2,

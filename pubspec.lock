@@ -269,10 +269,10 @@ packages:
     dependency: "direct main"
     description:
       name: mediapipe_face_mesh
-      sha256: c5b552174d207657e3eca17305a47bda91e8d56f0f8dbf9b4523b1a17fd9eb09
+      sha256: e7541edd021841445cc40ed151802b96214834a489e1403b8595a32ad275cb8e
       url: "https://pub.dev"
     source: hosted
-    version: "1.1.1"
+    version: "1.2.0"
   meta:
     dependency: transitive
     description:
